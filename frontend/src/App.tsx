@@ -44,6 +44,9 @@ export default function App() {
   // Modals & Tabs
   const [activeTab, setActiveTab] = useState<'chat' | 'docs'>('chat');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [assistantToDelete, setAssistantToDelete] = useState<Assistant | null>(null);
+  const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null);
+  const [documentToDelete, setDocumentToDelete] = useState<Document | null>(null);
   const [newAsstConfig, setNewAsstConfig] = useState({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -109,15 +112,41 @@ export default function App() {
     }
   };
 
-  const handleDeleteAssistant = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteAssistant = (assistant: Assistant, e: React.MouseEvent) => {
     e.stopPropagation();
+    setAssistantToDelete(assistant);
+  };
+
+  const confirmDeleteAssistant = async () => {
+    if (!assistantToDelete) return;
     try {
-      await fetch(`/api/assistants/${id}`, { method: 'DELETE' });
-      if (selectedAssistant?.id === id) setSelectedAssistant(null);
+      await fetch(`/api/assistants/${assistantToDelete.id}`, { method: 'DELETE' });
+      if (selectedAssistant?.id === assistantToDelete.id) setSelectedAssistant(null);
       fetchAssistants();
     } catch (e) {
       console.error(e);
     }
+    setAssistantToDelete(null);
+  };
+
+  const handleDeleteSession = (session: ChatSession, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSessionToDelete(session);
+  };
+
+  const confirmDeleteSession = async () => {
+    if (!sessionToDelete || !selectedAssistant) return;
+    try {
+      await fetch(`/api/sessions/${sessionToDelete.id}`, { method: 'DELETE' });
+      if (selectedSession?.id === sessionToDelete.id) {
+        setSelectedSession(null);
+        setMessages([]);
+      }
+      fetchSessions(selectedAssistant.id);
+    } catch (e) {
+      console.error(e);
+    }
+    setSessionToDelete(null);
   };
 
   const fetchSessions = async (assistantId: string) => {
@@ -182,13 +211,19 @@ export default function App() {
     if(fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleDeleteDocument = async (docId: string) => {
+  const handleDeleteDocument = (doc: Document) => {
+    setDocumentToDelete(doc);
+  };
+
+  const confirmDeleteDocument = async () => {
+    if (!documentToDelete) return;
     try {
-      await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+      await fetch(`/api/documents/${documentToDelete.id}`, { method: 'DELETE' });
       if (selectedAssistant) fetchDocuments(selectedAssistant.id);
     } catch (e) {
       console.error(e);
     }
+    setDocumentToDelete(null);
   };
 
   const handleSend = async (e: React.FormEvent) => {
@@ -270,7 +305,7 @@ export default function App() {
                     <div className="text-sm font-medium truncate">{a.name}</div>
                   </div>
                 </div>
-                <button onClick={(e) => handleDeleteAssistant(a.id, e)} className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded transition-all">
+                <button onClick={(e) => handleDeleteAssistant(a, e)} className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded transition-all">
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -326,13 +361,20 @@ export default function App() {
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-1">
                     {sessions.map(s => (
-                      <button 
+                      <div 
                         key={s.id}
                         onClick={() => setSelectedSession(s)}
-                        className={`w-full text-left px-3 py-2.5 rounded-md text-sm truncate transition-colors ${selectedSession?.id === s.id ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}
+                        className={`w-full group flex items-center justify-between px-3 py-2.5 rounded-md text-sm cursor-pointer transition-colors ${selectedSession?.id === s.id ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}
                       >
-                        {s.title || "New Conversation"}
-                      </button>
+                        <span className="truncate pr-2">{s.title || "New Conversation"}</span>
+                        <button 
+                          onClick={(e) => handleDeleteSession(s, e)} 
+                          className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-red-500 hover:bg-white rounded transition-all"
+                          title="Delete Session"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -460,7 +502,7 @@ export default function App() {
                                 <FileText size={16} className="text-blue-500 shrink-0" />
                                 <span className="text-sm font-medium text-gray-700 truncate">{doc.filename}</span>
                               </div>
-                              <button onClick={() => handleDeleteDocument(doc.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors">
+                              <button onClick={() => handleDeleteDocument(doc)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors">
                                 <Trash2 size={16} />
                               </button>
                             </li>
@@ -524,6 +566,81 @@ export default function App() {
                 <button type="submit" disabled={!newAsstConfig.name || !newAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all">Launch Assistant</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {assistantToDelete && (
+        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden p-6 text-center">
+            <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Assistant?</h3>
+            <p className="text-sm text-gray-500 mb-6">Are you sure you want to permanently delete "<span className="font-semibold text-gray-700">{assistantToDelete.name}</span>"? This will also remove all its sessions and knowledge base associations.</p>
+            <div className="flex justify-center gap-3">
+              <button 
+                onClick={() => setAssistantToDelete(null)} 
+                className="px-5 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDeleteAssistant} 
+                className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE SESSION CONFIRMATION MODAL */}
+      {sessionToDelete && (
+        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden p-6 text-center">
+            <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Conversation?</h3>
+            <p className="text-sm text-gray-500 mb-6">Are you sure you want to delete "<span className="font-semibold text-gray-700">{sessionToDelete.title || "New Conversation"}</span>"? All history will be lost.</p>
+            <div className="flex justify-center gap-3">
+              <button 
+                onClick={() => setSessionToDelete(null)} 
+                className="px-5 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDeleteSession} 
+                className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE DOCUMENT CONFIRMATION MODAL */}
+      {documentToDelete && (
+        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden p-6 text-center">
+            <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Document?</h3>
+            <p className="text-sm text-gray-500 mb-6">Are you sure you want to remove "<span className="font-semibold text-gray-700">{documentToDelete.filename}</span>" from this assistant's knowledge base?</p>
+            <div className="flex justify-center gap-3">
+              <button 
+                onClick={() => setDocumentToDelete(null)} 
+                className="px-5 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDeleteDocument} 
+                className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+              >
+                Yes, Delete
+              </button>
+            </div>
           </div>
         </div>
       )}

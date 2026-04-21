@@ -43,50 +43,46 @@ class SearchManager:
             print("Azure Search variables not configured. Skipping index creation.")
             return
 
-        try:
-            self.index_client.get_index(self.index_name)
-            print(f"Index {self.index_name} already exists.")
-        except Exception:
-            # Create schema for economical RAG
-            fields = [
-                SimpleField(name="id", type=SearchFieldDataType.String, key=True),
-                SimpleField(name="assistant_id", type=SearchFieldDataType.String, filterable=True),
-                SearchableField(name="content", type=SearchFieldDataType.String, analyzer_name="en.lucene"),
-                SearchableField(name="filename", type=SearchFieldDataType.String, filterable=True, sortable=True),
-                SearchField(name="contentVector", type=SearchFieldDataType.Collection(SearchFieldDataType.Single), 
-                            searchable=True, vector_search_dimensions=1536, vector_search_profile_name="my-vector-profile")
-            ]
+        # Create schema for economical RAG
+        fields = [
+            SimpleField(name="id", type=SearchFieldDataType.String, key=True),
+            SimpleField(name="assistant_id", type=SearchFieldDataType.String, filterable=True),
+            SearchableField(name="content", type=SearchFieldDataType.String, analyzer_name="en.lucene"),
+            SearchableField(name="filename", type=SearchFieldDataType.String, filterable=True, sortable=True),
+            SearchField(name="contentVector", type=SearchFieldDataType.Collection(SearchFieldDataType.Single), 
+                        searchable=True, vector_search_dimensions=1536, vector_search_profile_name="my-vector-profile")
+        ]
 
-            vector_search = VectorSearch(
-                algorithms=[
-                    HnswAlgorithmConfiguration(
-                        name="my-hnsw-config",
-                        kind=VectorSearchAlgorithmKind.HNSW,
-                    )
-                ],
-                profiles=[
-                    VectorSearchProfile(
-                        name="my-vector-profile",
-                        algorithm_configuration_name="my-hnsw-config",
-                    )
-                ]
-            )
-
-            semantic_config = SemanticConfiguration(
-                name="default-semantic-config",
-                prioritized_fields=SemanticPrioritizedFields(
-                    content_fields=[SemanticField(field_name="content")],
-                    title_field=SemanticField(field_name="filename"),
+        vector_search = VectorSearch(
+            algorithms=[
+                HnswAlgorithmConfiguration(
+                    name="my-hnsw-config",
+                    kind=VectorSearchAlgorithmKind.HNSW,
                 )
+            ],
+            profiles=[
+                VectorSearchProfile(
+                    name="my-vector-profile",
+                    algorithm_configuration_name="my-hnsw-config",
+                )
+            ]
+        )
+
+        semantic_config = SemanticConfiguration(
+            name="default-semantic-config",
+            prioritized_fields=SemanticPrioritizedFields(
+                content_fields=[SemanticField(field_name="content")],
+                title_field=SemanticField(field_name="filename"),
             )
+        )
 
-            semantic_search = SemanticSearch(configurations=[semantic_config])
+        semantic_search = SemanticSearch(configurations=[semantic_config])
 
-            index = SearchIndex(name=self.index_name, fields=fields, 
-                                vector_search=vector_search, semantic_search=semantic_search)
-            
-            self.index_client.create_index(index)
-            print(f"Created index {self.index_name}.")
+        index = SearchIndex(name=self.index_name, fields=fields, 
+                            vector_search=vector_search, semantic_search=semantic_search)
+        
+        self.index_client.create_or_update_index(index)
+        print(f"Ensured index {self.index_name} exists.")
 
     def generate_embeddings(self, text: str):
         response = self.openai_client.embeddings.create(input=[text], model=self.embedding_deployment)

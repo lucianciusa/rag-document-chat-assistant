@@ -125,3 +125,13 @@ def get_session_history(session_id: str, db: Session = Depends(get_db)):
     for m in messages:
         res.append({"role": m.role, "content": m.content, "citations": json.loads(m.citations) if m.citations else []})
     return res
+
+@app.delete("/sessions/{session_id}")
+def delete_session(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # Due to cascade rules or manual deletion, we delete it
+    db.delete(session)
+    db.commit()
+    return {"status": "deleted"}
