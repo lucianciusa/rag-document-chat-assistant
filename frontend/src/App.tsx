@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Brain, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library } from 'lucide-react';
+import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, ArrowRight, Zap, Sparkles, ImageIcon, ArrowDown } from 'lucide-react';
 
 interface Assistant {
   id: string;
   name: string;
   description: string;
   instructions: string;
+  image_url?: string;
 }
 
 interface ChatSession {
@@ -51,13 +52,20 @@ export default function App() {
   const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<Document | null>(null);
   const [newAsstConfig, setNewAsstConfig] = useState({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
-  const [editAsstConfig, setEditAsstConfig] = useState({ id: '', name: '', description: '', instructions: '' });
+  const [editAsstConfig, setEditAsstConfig] = useState({ id: '', name: '', description: '', instructions: '', image_url: '' });
   const [isDragging, setIsDragging] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [showChatsPane, setShowChatsPane] = useState(true);
+  const [newAsstImage, setNewAsstImage] = useState<File | null>(null);
+  const [editAsstImage, setEditAsstImage] = useState<File | null>(null);
+  const [removeEditImage, setRemoveEditImage] = useState(false);
+  const [generatingAvatar, setGeneratingAvatar] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const newAvatarInputRef = useRef<HTMLInputElement>(null);
+  const editAvatarInputRef = useRef<HTMLInputElement>(null);
 
   // Initialization
   useEffect(() => {
@@ -90,8 +98,15 @@ export default function App() {
     }
   }, [selectedSession]);
 
-  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  useEffect(() => scrollToBottom(), [messages]);
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+    setShowScrollButton(!isNearBottom);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   // ---- API Calls ----
 
@@ -100,7 +115,7 @@ export default function App() {
       const res = await fetch('/api/assistants/');
       const data = await res.json();
       setAssistants(data);
-      if (data.length > 0 && !selectedAssistant) setSelectedAssistant(data[0]);
+      // Homepage: do not auto-select — let user land on the homepage
     } catch (e) {
       console.error(e);
     }
@@ -114,12 +129,16 @@ export default function App() {
     formData.append('name', newAsstConfig.name);
     formData.append('description', newAsstConfig.description);
     formData.append('instructions', newAsstConfig.instructions);
+    if (newAsstImage) {
+      formData.append('image', newAsstImage);
+    }
 
     try {
       const res = await fetch('/api/assistants/', { method: 'POST', body: formData });
       if (res.ok) {
         setShowAddModal(false);
         setNewAsstConfig({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
+        setNewAsstImage(null);
         fetchAssistants();
       }
     } catch (e) {
@@ -135,11 +154,19 @@ export default function App() {
     formData.append('name', editAsstConfig.name);
     formData.append('description', editAsstConfig.description);
     formData.append('instructions', editAsstConfig.instructions);
+    if (editAsstImage) {
+      formData.append('image', editAsstImage);
+    }
+    if (removeEditImage) {
+      formData.append('remove_image', 'true');
+    }
 
     try {
       const res = await fetch(`/api/assistants/${editAsstConfig.id}`, { method: 'PUT', body: formData });
       if (res.ok) {
         setShowEditModal(false);
+        setEditAsstImage(null);
+        setRemoveEditImage(false);
         fetchAssistants();
         if (selectedAssistant && selectedAssistant.id === editAsstConfig.id) {
           const updated = await res.json();
@@ -157,9 +184,35 @@ export default function App() {
       id: assistant.id,
       name: assistant.name,
       description: assistant.description || '',
-      instructions: assistant.instructions
+      instructions: assistant.instructions,
+      image_url: assistant.image_url || ''
     });
+    setEditAsstImage(null);
+    setRemoveEditImage(false);
     setShowEditModal(true);
+  };
+
+  const handleGenerateAvatar = async (assistantId: string) => {
+    setGeneratingAvatar(true);
+    try {
+      const res = await fetch(`/api/assistants/${assistantId}/avatar/generate`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setEditAsstConfig(prev => ({ ...prev, image_url: data.image_url }));
+        fetchAssistants();
+        if (selectedAssistant?.id === assistantId) {
+          setSelectedAssistant(prev => prev ? { ...prev, image_url: data.image_url } : prev);
+        }
+      } else {
+        const err = await res.json();
+        alert(err.detail || 'Failed to generate avatar');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Failed to generate avatar');
+    } finally {
+      setGeneratingAvatar(false);
+    }
   };
 
   const handleDeleteAssistant = (assistant: Assistant, e: React.MouseEvent) => {
@@ -226,6 +279,9 @@ export default function App() {
       const res = await fetch(`/api/sessions/${sessionId}/history/`);
       const data = await res.json();
       setMessages(data);
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
     } catch (e) {
       console.error(e);
     }
@@ -332,9 +388,12 @@ export default function App() {
       // Refresh sessions to get updated title
       if (selectedAssistant) fetchSessions(selectedAssistant.id);
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I'm having trouble connecting." }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I encountered an error. Please try again." }]);
     } finally {
       setIsLoading(false);
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
     }
   };
 
@@ -343,22 +402,25 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-white">
 
-      {/* Mobile Nav */}
-      <div className="md:hidden absolute top-4 left-4 z-50">
-        <button onClick={() => setSidebarOpen(true)} className="p-2 bg-white dark:bg-slate-900 rounded-md shadow text-slate-600 dark:text-slate-400">
-          <Menu size={20} />
-        </button>
-      </div>
+      {/* Mobile Nav - only when assistant selected */}
+      {selectedAssistant && (
+        <div className="md:hidden absolute top-4 left-4 z-50">
+          <button onClick={() => setSidebarOpen(true)} className="p-2 bg-white dark:bg-slate-900 rounded-md shadow text-slate-600 dark:text-slate-400">
+            <Menu size={20} />
+          </button>
+        </div>
+      )}
 
       {sidebarOpen && <div className="fixed inset-0 bg-black/20 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />}
 
-      {/* Global Sidebar (Assistants) */}
-      <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+      {/* Global Sidebar (Assistants) - hidden on homepage */}
+      {selectedAssistant && (
+      <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="h-[76px] px-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
+          <button onClick={() => { setSelectedAssistant(null); setSidebarOpen(false); }} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <Library className="text-indigo-400" size={24} />
             <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
-          </div>
+          </button>
           <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
         </div>
 
@@ -371,7 +433,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-3 space-y-1">
+        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
           <div className="px-3 pt-2 pb-1 text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Your Assistants</div>
           {assistants.length === 0 ? (
             <div className="px-3 py-4 text-sm text-slate-600 dark:text-slate-400 italic text-center">No assistants created yet.</div>
@@ -383,7 +445,11 @@ export default function App() {
                 className={`w-full text-left px-3 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'}`}
               >
                 <div className="flex items-center gap-3 overflow-hidden">
-                  <Bot size={18} className={selectedAssistant?.id === a.id ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 group-hover:text-indigo-500"} />
+                  {a.image_url ? (
+                    <img src={a.image_url} alt={a.name} className="w-7 h-7 rounded-lg object-cover shrink-0" />
+                  ) : (
+                    <Bot size={18} className={selectedAssistant?.id === a.id ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 group-hover:text-indigo-500"} />
+                  )}
                   <div className="truncate">
                     <div className="text-sm font-medium truncate">{a.name}</div>
                   </div>
@@ -408,6 +474,7 @@ export default function App() {
           </button>
         </div>
       </aside>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full bg-white dark:bg-slate-900 relative min-w-0">
@@ -416,9 +483,13 @@ export default function App() {
             {/* Context Header */}
             <header className="min-h-[76px] py-3 px-4 pl-14 md:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap sm:flex-nowrap items-center justify-between shadow-sm z-10 w-full shrink-0 gap-3">
               <div className="flex items-center gap-3 min-w-0 flex-1">
-                <div className="p-2 bg-indigo-900/30 text-indigo-400 rounded-lg shrink-0">
-                  <Bot size={24} />
-                </div>
+                {selectedAssistant.image_url ? (
+                  <img src={selectedAssistant.image_url} alt={selectedAssistant.name} className="w-10 h-10 rounded-lg object-cover shrink-0" />
+                ) : (
+                  <div className="p-2 bg-indigo-900/30 text-indigo-400 rounded-lg shrink-0">
+                    <Bot size={24} />
+                  </div>
+                )}
                 <div className="min-w-0">
                   <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200 leading-tight truncate">{selectedAssistant.name}</h2>
                   <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{selectedAssistant.description || "AI Assistant"}</p>
@@ -445,7 +516,7 @@ export default function App() {
             {activeTab === 'chat' ? (
               <div className="flex-1 flex overflow-hidden min-w-0">
                 {/* Left Drawer: Sessions */}
-                <div className={`w-full md:w-64 border-r border-slate-200/50 dark:border-slate-800/50 bg-slate-50/50 dark:bg-slate-950/50 flex flex-col transition-all duration-300 ${selectedSession ? 'hidden md:flex' : 'flex'} ${!showChatsPane ? 'md:hidden' : ''}`}>
+                <div className={`w-full md:w-64 border-r border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 flex flex-col transition-all duration-300 ${selectedSession ? 'hidden md:flex' : 'flex'} ${!showChatsPane ? 'md:hidden' : ''}`}>
                   <div className="p-4">
                     <button
                       onClick={handleCreateSession}
@@ -504,7 +575,7 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth w-full">
+                      <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth w-full relative" onScroll={handleScroll}>
                         <div className="max-w-3xl mx-auto space-y-8 pb-32">
                           {messages.length === 0 && (
                             <div className="flex flex-col items-center text-center mt-20 text-slate-500">
@@ -569,10 +640,22 @@ export default function App() {
                       </div>
 
                       {/* Chat Input */}
-                      <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white dark:from-slate-950 via-white/80 dark:via-slate-950/80 to-transparent pt-32 pb-4 md:pb-6 px-3 md:px-8">
-                        <form onSubmit={handleSend} className="max-w-3xl mx-auto relative flex items-end overflow-hidden rounded-2xl bg-white dark:bg-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.08)] border border-slate-200 dark:border-slate-800 focus-within:border-indigo-400 dark:focus-within:border-indigo-500/50 focus-within:ring-2 focus-within:ring-indigo-100 dark:focus-within:ring-indigo-500/20 transition-all min-w-0">
-                          <textarea
-                            value={input}
+                      <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white dark:from-slate-950 via-white/80 dark:via-slate-950/80 to-transparent pt-32 pb-4 md:pb-6 px-3 md:px-8 pointer-events-none">
+                        
+                        <div className="max-w-3xl mx-auto relative pointer-events-auto">
+                          {showScrollButton && (
+                            <div className="absolute -top-14 left-1/2 -translate-x-1/2 flex justify-center w-full z-20">
+                              <button
+                                onClick={scrollToBottom}
+                                className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
+                              >
+                                <ArrowDown size={20} />
+                              </button>
+                            </div>
+                          )}
+                          <form onSubmit={handleSend} className="relative flex items-end overflow-hidden rounded-2xl bg-white dark:bg-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.08)] border border-slate-200 dark:border-slate-800 focus-within:border-indigo-400 dark:focus-within:border-indigo-500/50 focus-within:ring-2 focus-within:ring-indigo-100 dark:focus-within:ring-indigo-500/20 transition-all min-w-0">
+                            <textarea
+                              value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
                             placeholder={`Ask ${selectedAssistant.name}...`}
@@ -586,6 +669,7 @@ export default function App() {
                         </form>
                         <div className="text-center mt-2">
                           <span className="text-[11px] text-slate-500 font-medium tracking-wide">Assistant contextualizes strictly off uploaded files.</span>
+                        </div>
                         </div>
                       </div>
                     </>
@@ -667,15 +751,78 @@ export default function App() {
             )}
           </>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-8 text-center">
-            <div className="w-20 h-20 bg-indigo-900/30 rounded-2xl border border-indigo-500/20 shadow-[0_0_30px_rgba(99,102,241,0.15)] flex items-center justify-center mb-6">
-              <Library className="text-indigo-400" size={40} />
+          <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950">
+            {/* Homepage Top Bar */}
+            <div className="h-[76px] px-5 md:px-8 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <Library className="text-indigo-400" size={24} />
+                <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
+              </div>
+              <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}>
+                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
             </div>
-            <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Welcome to Lincite</h2>
-            <p className="text-slate-600 dark:text-slate-400 max-w-md mx-auto mb-8">Create highly specialized AI models and isolate their knowledge bases. Select an assistant from the left or create a new one to begin.</p>
-            <button onClick={() => setShowAddModal(true)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium shadow-md hover:bg-indigo-500 transition-all flex items-center gap-2">
-              <Plus size={20} /> Create Your First Assistant
-            </button>
+
+            {/* Homepage Content */}
+            <div className="max-w-5xl mx-auto px-4 md:px-8 py-12 md:py-16">
+              
+              {/* Hero Section */}
+              <div className="text-center mb-12 md:mb-16">
+                <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl border border-indigo-200 dark:border-indigo-500/20 shadow-[0_0_30px_rgba(99,102,241,0.1)] dark:shadow-[0_0_30px_rgba(99,102,241,0.15)] flex items-center justify-center mx-auto mb-6">
+                  <Library className="text-indigo-600 dark:text-indigo-400" size={32} />
+                </div>
+                <h2 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-white mb-3 tracking-tight">Welcome to Lincite</h2>
+                <p className="text-slate-500 dark:text-slate-400 max-w-lg mx-auto text-base md:text-lg leading-relaxed">Build specialized AI assistants with isolated knowledge bases. Upload documents and chat with precision-tuned models.</p>
+              </div>
+
+              {/* Assistants Grid */}
+              {assistants.length > 0 ? (
+                <>
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Your Assistants</h3>
+                    <button onClick={() => setShowAddModal(true)} className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-colors">
+                      <Plus size={16} /> New Assistant
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {assistants.map(a => (
+                      <button
+                        key={a.id}
+                        onClick={() => setSelectedAssistant(a)}
+                        className="group relative text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 hover:border-indigo-300 dark:hover:border-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/5 dark:hover:shadow-indigo-500/10 transition-all duration-200 cursor-pointer"
+                      >
+                        <div className="flex items-start justify-between mb-3">
+                          {a.image_url ? (
+                            <img src={a.image_url} alt={a.name} className="w-14 h-14 rounded-xl object-cover shrink-0 group-hover:shadow-md transition-shadow" />
+                          ) : (
+                            <div className="p-2.5 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:bg-indigo-100 dark:group-hover:bg-indigo-900/50 transition-colors">
+                              <Bot size={22} />
+                            </div>
+                          )}
+                          <ArrowRight size={18} className="text-slate-300 dark:text-slate-600 group-hover:text-indigo-500 dark:group-hover:text-indigo-400 group-hover:translate-x-1 transition-all mt-1" />
+                        </div>
+                        <h4 className="text-base font-semibold text-slate-900 dark:text-white mb-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{a.name}</h4>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed">{a.description || 'No description provided'}</p>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-16">
+                  <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-10 md:p-14 max-w-lg mx-auto">
+                    <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl flex items-center justify-center mx-auto mb-5">
+                      <Zap className="text-indigo-600 dark:text-indigo-400" size={28} />
+                    </div>
+                    <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Create Your First Assistant</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 max-w-sm mx-auto">Get started by creating an AI assistant with custom instructions and its own isolated knowledge base.</p>
+                    <button onClick={() => setShowAddModal(true)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium shadow-md hover:bg-indigo-500 transition-all inline-flex items-center gap-2">
+                      <Plus size={20} /> Create Assistant
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            </div>
           </div>
         )}
       </main>
@@ -688,19 +835,50 @@ export default function App() {
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Edit Assistant</h2>
               <button onClick={() => setShowEditModal(false)} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:bg-slate-800"><X size={20} /></button>
             </div>
-            <form onSubmit={handleUpdateAssistant} className="p-6 space-y-5">
+            <form onSubmit={handleUpdateAssistant} className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+              {/* Avatar Section */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Avatar</label>
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
+                    {editAsstImage ? (
+                      <img src={URL.createObjectURL(editAsstImage)} alt="Preview" className="w-full h-full object-cover" />
+                    ) : editAsstConfig.image_url && !removeEditImage ? (
+                      <img src={editAsstConfig.image_url} alt="Avatar" className="w-full h-full object-cover" />
+                    ) : (
+                      <Bot size={28} className="text-slate-400" />
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-2">
+                      <input type="file" ref={editAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) { setEditAsstImage(e.target.files[0]); setRemoveEditImage(false); } }} />
+                      <button type="button" onClick={() => editAvatarInputRef.current?.click()} className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1.5">
+                        <ImageIcon size={14} /> Upload
+                      </button>
+                      <button type="button" onClick={() => handleGenerateAvatar(editAsstConfig.id)} disabled={generatingAvatar} className="px-3 py-1.5 text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                        {generatingAvatar ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate
+                      </button>
+                    </div>
+                    {(editAsstConfig.image_url || editAsstImage) && !removeEditImage && (
+                      <button type="button" onClick={() => { setRemoveEditImage(true); setEditAsstImage(null); }} className="text-xs text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors text-left">
+                        Remove image
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span className="text-red-500">*</span></label>
-                <input required type="text" value={editAsstConfig.name} onChange={e => setEditAsstConfig({ ...editAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
+                <input required type="text" value={editAsstConfig.name} onChange={e => setEditAsstConfig({ ...editAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
-                <input type="text" value={editAsstConfig.description} onChange={e => setEditAsstConfig({ ...editAsstConfig, description: e.target.value })} placeholder="Briefly describe its purpose" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
+                <input type="text" value={editAsstConfig.description} onChange={e => setEditAsstConfig({ ...editAsstConfig, description: e.target.value })} placeholder="Briefly describe its purpose" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">System Instructions <span className="text-red-500">*</span></label>
                 <p className="text-[11px] text-slate-500 mb-2">Define how the AI should behave, its tone, and strict rules.</p>
-                <textarea required value={editAsstConfig.instructions} onChange={e => setEditAsstConfig({ ...editAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
+                <textarea required value={editAsstConfig.instructions} onChange={e => setEditAsstConfig({ ...editAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed" />
               </div>
               <div className="pt-2 flex justify-end gap-3">
                 <button type="button" onClick={() => setShowEditModal(false)} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
@@ -719,7 +897,34 @@ export default function App() {
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Create New Assistant</h2>
               <button onClick={() => setShowAddModal(false)} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:bg-slate-800"><X size={20} /></button>
             </div>
-            <form onSubmit={handleCreateAssistant} className="p-6 space-y-5">
+            <form onSubmit={handleCreateAssistant} className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+              {/* Avatar Section */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Avatar <span className="text-xs text-slate-400 font-normal">(optional)</span></label>
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
+                    {newAsstImage ? (
+                      <img src={URL.createObjectURL(newAsstImage)} alt="Preview" className="w-full h-full object-cover" />
+                    ) : (
+                      <Bot size={28} className="text-slate-400" />
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-2">
+                      <input type="file" ref={newAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) setNewAsstImage(e.target.files[0]); }} />
+                      <button type="button" onClick={() => newAvatarInputRef.current?.click()} className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1.5">
+                        <ImageIcon size={14} /> Upload Image
+                      </button>
+                    </div>
+                    {newAsstImage && (
+                      <button type="button" onClick={() => setNewAsstImage(null)} className="text-xs text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors text-left">
+                        Remove image
+                      </button>
+                    )}
+                    <p className="text-[11px] text-slate-400">You can generate an AI avatar after creation.</p>
+                  </div>
+                </div>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span className="text-red-500">*</span></label>
                 <input required type="text" value={newAsstConfig.name} onChange={e => setNewAsstConfig({ ...newAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
@@ -734,7 +939,7 @@ export default function App() {
                 <textarea required value={newAsstConfig.instructions} onChange={e => setNewAsstConfig({ ...newAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 border border-slate-300 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
               </div>
               <div className="pt-2 flex justify-end gap-3">
-                <button type="button" onClick={() => setShowAddModal(false)} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+                <button type="button" onClick={() => { setShowAddModal(false); setNewAsstImage(null); }} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
                 <button type="submit" disabled={!newAsstConfig.name || !newAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all">Launch Assistant</button>
               </div>
             </form>

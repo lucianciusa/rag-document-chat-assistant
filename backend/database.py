@@ -16,6 +16,7 @@ class Assistant(Base):
     name = Column(String, nullable=False)
     description = Column(String, nullable=True)
     instructions = Column(Text, nullable=False)
+    image_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     sessions = relationship("ChatSession", back_populates="assistant", cascade="all, delete-orphan")
