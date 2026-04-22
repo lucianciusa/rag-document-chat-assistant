@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Brain, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, Sun, Moon, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Send, Upload, Trash2, Brain, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library } from 'lucide-react';
 
 interface Assistant {
   id: string;
@@ -356,8 +356,8 @@ export default function App() {
       <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="h-[76px] px-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
-            <Brain className="text-indigo-400" size={24} />
-            <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Nexus AI</h1>
+            <Library className="text-indigo-400" size={24} />
+            <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
           </div>
           <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
         </div>
@@ -425,7 +425,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-lg shrink-0">
+              <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg shrink-0">
                 <button
                   onClick={() => setActiveTab('chat')}
                   className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'chat' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
@@ -669,9 +669,9 @@ export default function App() {
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-8 text-center">
             <div className="w-20 h-20 bg-indigo-900/30 rounded-2xl border border-indigo-500/20 shadow-[0_0_30px_rgba(99,102,241,0.15)] flex items-center justify-center mb-6">
-              <Brain className="text-indigo-400" size={40} />
+              <Library className="text-indigo-400" size={40} />
             </div>
-            <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Welcome to Nexus AI</h2>
+            <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-200 mb-2">Welcome to Lincite</h2>
             <p className="text-slate-600 dark:text-slate-400 max-w-md mx-auto mb-8">Create highly specialized AI models and isolate their knowledge bases. Select an assistant from the left or create a new one to begin.</p>
             <button onClick={() => setShowAddModal(true)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium shadow-md hover:bg-indigo-500 transition-all flex items-center gap-2">
               <Plus size={20} /> Create Your First Assistant
