@@ -71,4 +71,9 @@ class ChatManager:
             max_tokens=800
         )
         
-        return response.choices[0].message.content, list(set(citations))
+        reply = response.choices[0].message.content
+        
+        # Only return citations that were actually used (mentioned) in the completion.
+        used_citations = [c for c in set(citations) if c in reply]
+        
+        return reply, used_citations

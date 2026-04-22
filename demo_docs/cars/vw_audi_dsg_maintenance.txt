@@ -1,0 +1,14 @@
+Volkswagen/Audi Dual-Clutch Transmission (DSG/S-Tronic) Maintenance Guide
+
+The DSG (Direct-Shift Gearbox) provides lightning-fast gear changes used in the VW Golf GTI, Golf R, Audi S3, and Audi A3. While highly durable, it strictly demands precise fluid maintenance.
+
+Service Schedule:
+- The DSG transmission fluid and internal filter MUST be replaced every 40,000 miles. Failure to do so leads to mechatronic unit failure, a highly expensive repair.
+
+Symptoms of Bad or Old Fluid:
+1. "Clunking" or aggressive jerking when shifting from 1st to 2nd gear in traffic.
+2. Delayed engagement when shifting from Park to Drive.
+3. Slipping clutches under heavy acceleration.
+
+Best Practices:
+Unlike traditional torque-converter automatics, a DSG behaves like an automated manual. Creeping forward in traffic by riding the brake pedal causes the clutches to slip and overheat. Always leave a gap in traffic and accelerate cleanly to fully engage first gear.

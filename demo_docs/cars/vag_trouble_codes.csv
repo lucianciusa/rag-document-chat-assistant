@@ -1,0 +1,9 @@
+VAG (Volkswagen Audi Group) Generic German OBD2 & VCDS Trouble Codes
+
+Code,Description,Common Causes,Severity Level
+P0299,System Too Lean (Bank 1),Often caused by a failing PCV valve in older 2.0T TSI engines or a vacuum leak.,Moderate
+P0300,Random Cylinder Misfire,Ignition coil packs failing (very common on VW/Audi). Plugs need updating.,High
+P0234,Turbocharger Underboost Condition,Failing diverter valve or torn turbo inlet pipe.,Moderate
+P0507,Idle Air Control System RPM Higher Than Expected,Vacuum leak or a cracked PCV valve diaphragm.,Low
+U0100,Lost Communication With ECM/PCM,Electrical gremlins standard in early 2000s German cars.,High
+P2261,Turbocharger Bypass Valve Mechanical Malfunction,Stuck N249 valve or carbon buildup on the intake valves.,Moderate

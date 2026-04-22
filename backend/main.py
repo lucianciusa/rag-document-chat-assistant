@@ -45,6 +45,18 @@ def create_assistant(name: str = Form(...), instructions: str = Form(...), descr
 def list_assistants(db: Session = Depends(get_db)):
     return db.query(Assistant).all()
 
+@app.put("/assistants/{assistant_id}")
+def update_assistant(assistant_id: str, name: str = Form(...), instructions: str = Form(...), description: str = Form(None), db: Session = Depends(get_db)):
+    assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
+    if not assistant:
+        raise HTTPException(status_code=404, detail="Assistant not found")
+    assistant.name = name
+    assistant.instructions = instructions
+    assistant.description = description
+    db.commit()
+    db.refresh(assistant)
+    return assistant
+
 @app.delete("/assistants/{assistant_id}")
 def delete_assistant(assistant_id: str, db: Session = Depends(get_db)):
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
@@ -113,6 +125,8 @@ async def send_chat_message(session_id: str, request: dict, db: Session = Depend
     ai_msg = ChatMessage(session_id=session_id, role="assistant", content=response_text, citations=cites_json)
     db.add(ai_msg)
     
+    from datetime import datetime
+    chat_session.updated_at = datetime.utcnow()
     chat_session.title = query[:30] + "..." if len(history_records) == 0 else chat_session.title
     db.commit()
 

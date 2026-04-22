@@ -1,0 +1,8 @@
+Engine Profile: BMW B58 3.0L Inline-6 Turbo
+The B58 is a legendary modern engine used in the BMW M340i, X5 M40i, 440i, and 540i. Stock power operates between 320 to 382 horsepower depending on the tuning variation.
+
+Reliability and Known Issues:
+While widely considered one of the most reliable engines BMW has ever built (far superior to the older N54/N55 V8s and I6s), the B58 has three notable common failure points to watch out for:
+1. PCV Valve Diaphragm: Tends to tear around 60k miles. Symptoms include a loud squealing/whistling noise from the valve cover and excessive oil consumption.
+2. Water Pump Weep Hole: A slow coolant leak often develops at the mechanical water pump. If you get a "Low Coolant" warning, check the belly pan for dried white/blue coolant crust.
+3. Oil Filter Housing: Made of plastic, the housing can warp and leak oil over time due to heat cycles. Requires replacement of the entire housing unit, not just the gasket.

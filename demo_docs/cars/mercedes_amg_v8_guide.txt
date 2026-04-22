@@ -1,0 +1,12 @@
+Engine Profile: Mercedes-AMG 4.0L V8 Biturbo (M177/M178)
+The handcrafted AMG M177 and M178 engines are the backbone of modern Mercedes-AMG performance vehicles, including the C63 AMG, E63 AMG, and AMG GT.
+
+Specifications:
+- Configuration: 90-degree V8
+- Features: "Hot inside V" turbocharger placement (turbos sit between the cylinder banks for unmatched throttle response). 
+- Power Output: Typically ranges from 469 hp to over 630 hp depending on the vehicle and tune.
+
+Common Maintenance Notes:
+- Spark Plugs: Due to extreme heat in the "Hot V" configuration, spark plugs must be replaced strictly every 30,000 miles. Misfires are common if delayed.
+- Motor Mounts: The massive torque output significantly degrades hydraulic motor mounts. Replacing them around 50,000 miles is generally required for smooth idle.
+- Oil Separator: Often builds negative pressure and fails. If whistling is heard at idle, the oil separator is the prime suspect.

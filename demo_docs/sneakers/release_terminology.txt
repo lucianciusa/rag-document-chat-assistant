@@ -1,0 +1,5 @@
+Sneaker Release Terminology:
+- GR (General Release): Shoes produced in massive quantities (often >100,000 pairs). Available at standard retailers like FootLocker. Rarely have resale value.
+- QS (Quickstrike): Limited runs (10,000 to 50,000 pairs). Often restricted to Tier 0 boutique stores. Moderate to high resale value.
+- F&F (Friends and Family): Exclusive pairs never released to the public, given only to the designer's inner circle. Usually fewer than 500 pairs in existence. Extreme resale value.
+- Shock Drop: An unannounced, surprise release on the Nike SNKRS app, usually lasting only 10 minutes.
