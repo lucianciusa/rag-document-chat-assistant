@@ -6,6 +6,7 @@ import httpx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response, FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect as sa_inspect
 from dotenv import load_dotenv
@@ -16,18 +17,20 @@ load_dotenv()
 from backend.search_manager import SearchManager
 from backend.chat_manager import ChatManager
 from backend.processors import parse_document
+from backend.blob_storage import BlobStorageManager
 from backend.database import engine, Base, get_db, Assistant, Document, ChatSession, ChatMessage
 
 Base.metadata.create_all(bind=engine)
 
-# Migrate existing databases: add image_url column if missing
+# Migrate existing databases: add image_url column if missing (SQLite only)
 def migrate_db():
-    inspector = sa_inspect(engine)
-    columns = [col['name'] for col in inspector.get_columns('assistants')]
-    if 'image_url' not in columns:
-        from sqlalchemy import text
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE assistants ADD COLUMN image_url VARCHAR"))
+    if not os.getenv("AZURE_SQL_CONNECTION_STRING"):
+        inspector = sa_inspect(engine)
+        columns = [col['name'] for col in inspector.get_columns('assistants')]
+        if 'image_url' not in columns:
+            from sqlalchemy import text
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE assistants ADD COLUMN image_url VARCHAR"))
 
 try:
     migrate_db()
@@ -44,12 +47,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static file serving for avatars
-os.makedirs("uploads/avatars", exist_ok=True)
-app.mount("/avatars", StaticFiles(directory="uploads/avatars"), name="avatars")
-
+# Initialize storage and services
+storage = BlobStorageManager()
 search_manager = SearchManager()
 chat_manager = ChatManager(search_manager)
+
+# Static file serving for avatars (local mode only)
+if storage.mode == "local":
+    os.makedirs("uploads/avatars", exist_ok=True)
+    app.mount("/avatars", StaticFiles(directory="uploads/avatars"), name="avatars")
 
 # Image generation client (optional)
 image_client = None
@@ -64,8 +70,9 @@ if os.getenv("AZURE_OPENAI_API_KEY") and image_deployment:
 @app.on_event("startup")
 async def startup_event():
     search_manager.initialize_index()
-    os.makedirs("uploads", exist_ok=True)
-    os.makedirs("uploads/avatars", exist_ok=True)
+    if storage.mode == "local":
+        os.makedirs("uploads", exist_ok=True)
+        os.makedirs("uploads/avatars", exist_ok=True)
 
 @app.post("/assistants/")
 async def create_assistant(
@@ -84,10 +91,8 @@ async def create_assistant(
     if image and image.filename:
         ext = os.path.splitext(image.filename)[1] or '.png'
         avatar_filename = f"{assistant.id}{ext}"
-        avatar_path = os.path.join("uploads", "avatars", avatar_filename)
-        with open(avatar_path, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        assistant.image_url = f"/api/avatars/{avatar_filename}"
+        avatar_url = storage.upload_avatar_from_file(avatar_filename, image)
+        assistant.image_url = avatar_url
         db.commit()
         db.refresh(assistant)
     
@@ -117,31 +122,28 @@ async def update_assistant(
     # Handle image removal
     if remove_image == 'true':
         if assistant.image_url:
-            old_path = os.path.join("uploads", "avatars", os.path.basename(assistant.image_url))
-            if os.path.exists(old_path):
-                os.remove(old_path)
+            old_filename = os.path.basename(assistant.image_url)
+            storage.delete_avatar(old_filename)
         assistant.image_url = None
     
     # Handle new image upload
     if image and image.filename:
         # Remove old image if exists
         if assistant.image_url:
-            old_path = os.path.join("uploads", "avatars", os.path.basename(assistant.image_url))
-            if os.path.exists(old_path):
-                os.remove(old_path)
+            old_filename = os.path.basename(assistant.image_url)
+            storage.delete_avatar(old_filename)
         ext = os.path.splitext(image.filename)[1] or '.png'
-        avatar_filename = f"{assistant_id}{ext}"
-        avatar_path = os.path.join("uploads", "avatars", avatar_filename)
-        with open(avatar_path, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        assistant.image_url = f"/api/avatars/{avatar_filename}"
+        import time
+        avatar_filename = f"{assistant_id}_{int(time.time())}{ext}"
+        avatar_url = storage.upload_avatar_from_file(avatar_filename, image)
+        assistant.image_url = avatar_url
     
     db.commit()
     db.refresh(assistant)
     return assistant
 
 @app.post("/assistants/{assistant_id}/avatar/upload")
-async def upload_avatar(
+def upload_avatar(
     assistant_id: str,
     image: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -152,23 +154,21 @@ async def upload_avatar(
     
     # Remove old avatar if exists
     if assistant.image_url:
-        old_path = os.path.join("uploads", "avatars", os.path.basename(assistant.image_url))
-        if os.path.exists(old_path):
-            os.remove(old_path)
+        old_filename = os.path.basename(assistant.image_url)
+        storage.delete_avatar(old_filename)
     
     ext = os.path.splitext(image.filename)[1] or '.png'
-    avatar_filename = f"{assistant_id}{ext}"
-    avatar_path = os.path.join("uploads", "avatars", avatar_filename)
-    with open(avatar_path, "wb") as f:
-        shutil.copyfileobj(image.file, f)
+    import time
+    avatar_filename = f"{assistant_id}_{int(time.time())}{ext}"
+    avatar_url = storage.upload_avatar_from_file(avatar_filename, image)
     
-    assistant.image_url = f"/api/avatars/{avatar_filename}"
+    assistant.image_url = avatar_url
     db.commit()
     db.refresh(assistant)
     return {"image_url": assistant.image_url}
 
 @app.post("/assistants/{assistant_id}/avatar/generate")
-async def generate_avatar(
+def generate_avatar(
     assistant_id: str,
     db: Session = Depends(get_db)
 ):
@@ -194,18 +194,11 @@ async def generate_avatar(
             model=image_deployment,
             prompt=prompt,
             n=1,
-            size="1024x1024",
-            quality="low"
+            size="1024x1024"
         )
         
-        avatar_filename = f"{assistant_id}.png"
-        avatar_path = os.path.join("uploads", "avatars", avatar_filename)
-        
-        # Remove old avatar if exists
-        if assistant.image_url:
-            old_path = os.path.join("uploads", "avatars", os.path.basename(assistant.image_url))
-            if os.path.exists(old_path) and old_path != avatar_path:
-                os.remove(old_path)
+        import time
+        avatar_filename = f"tmp_{assistant_id}_{int(time.time())}.png"
         
         image_data = response.data[0]
         
@@ -213,54 +206,73 @@ async def generate_avatar(
         if hasattr(image_data, 'b64_json') and image_data.b64_json:
             print("[Avatar Gen] Received base64 response, decoding...")
             img_bytes = base64.b64decode(image_data.b64_json)
-            with open(avatar_path, "wb") as f:
-                f.write(img_bytes)
         elif hasattr(image_data, 'url') and image_data.url:
             print(f"[Avatar Gen] Received URL response, downloading...")
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                img_response = await client.get(image_data.url)
+            with httpx.Client(timeout=60.0) as client:
+                img_response = client.get(image_data.url)
                 img_response.raise_for_status()
-            with open(avatar_path, "wb") as f:
-                f.write(img_response.content)
+            img_bytes = img_response.content
         else:
             raise Exception(f"Unexpected response format: {dir(image_data)}")
         
-        print(f"[Avatar Gen] Saved to {avatar_path}")
+        avatar_url = storage.upload_avatar(avatar_filename, img_bytes)
+        print(f"[Avatar Gen] Saved to {avatar_url}")
         
-        assistant.image_url = f"/api/avatars/{avatar_filename}"
-        db.commit()
-        db.refresh(assistant)
-        return {"image_url": assistant.image_url}
+        return {"image_url": avatar_url}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+
+@app.delete("/avatars/{filename}")
+def delete_avatar_endpoint(filename: str):
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if storage.avatar_exists(filename):
+        storage.delete_avatar(filename)
+        return {"status": "deleted"}
+    return {"status": "not found"}
 
 @app.delete("/assistants/{assistant_id}")
 def delete_assistant(assistant_id: str, db: Session = Depends(get_db)):
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found")
-    # Clean up avatar file
+        
+    # Clean up search indices
+    try:
+        search_manager.delete_assistant_documents(assistant_id)
+    except Exception as e:
+        print(f"Failed to delete search indices for assistant {assistant_id}: {e}")
+
+    # Clean up document files from storage
+    for doc in assistant.documents:
+        count = db.query(Document).filter(Document.filename == doc.filename).count()
+        if count <= 1:
+            storage.delete_document(doc.filename)
+
+    # Clean up avatar file from storage
     if assistant.image_url:
-        avatar_path = os.path.join("uploads", "avatars", os.path.basename(assistant.image_url))
-        if os.path.exists(avatar_path):
-            os.remove(avatar_path)
+        avatar_filename = os.path.basename(assistant.image_url)
+        storage.delete_avatar(avatar_filename)
+            
     db.delete(assistant)
     db.commit()
     return {"status": "deleted"}
 
 @app.post("/assistants/{assistant_id}/documents/")
-async def upload_document(assistant_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_document(assistant_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     if not assistant: return {"error": "Assistant not found"}
 
-    file_path = os.path.join("uploads", file.filename)
-    with open(file_path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
+    # Upload file to storage
+    storage.upload_document(file.filename, file)
         
     try:
-        text_content = parse_document(file_path, file.filename)
+        # Get a local path for parsing (downloads from blob if in Azure mode)
+        local_path = storage.get_document_local_path(file.filename)
+        text_content = parse_document(local_path, file.filename)
         file_stats = search_manager.process_and_index_document(text_content, file.filename, assistant_id)
-        doc = Document(id=file.filename, assistant_id=assistant_id, filename=file.filename)
+        doc = Document(assistant_id=assistant_id, filename=file.filename)
         db.add(doc)
         db.commit()
         return {"filename": file.filename, "status": "indexed", "chunks": file_stats["chunks"]}
@@ -275,9 +287,54 @@ def list_documents(assistant_id: str, db: Session = Depends(get_db)):
 def delete_document(doc_id: str, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc: raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Clean up search indices
+    try:
+        search_manager.delete_document_by_filename(doc.filename, doc.assistant_id)
+    except Exception as e:
+        print(f"Failed to delete search index for doc {doc.filename}: {e}")
+        
+    # Clean up file from storage
+    count = db.query(Document).filter(Document.filename == doc.filename).count()
+    if count <= 1:
+        storage.delete_document(doc.filename)
+            
     db.delete(doc)
     db.commit()
     return {"status": "deleted"}
+
+@app.get("/documents/{doc_id}/preview")
+def preview_document(doc_id: str, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if not storage.document_exists(doc.filename):
+        raise HTTPException(status_code=404, detail="File not found in storage")
+    
+    ext = os.path.splitext(doc.filename)[1].lower()
+    
+    # Text-based files: return content as JSON for the frontend to render
+    if ext in [".md", ".txt", ".csv"]:
+        content = storage.get_document_text(doc.filename)
+        return JSONResponse({"type": ext.lstrip("."), "filename": doc.filename, "content": content})
+    
+    # PDF files: serve the raw binary for embedded viewing
+    if ext == ".pdf":
+        data = storage.get_document_bytes(doc.filename)
+        return Response(content=data, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{doc.filename}"'})
+    
+    # Image files: serve the raw binary
+    if ext in [".png", ".jpg", ".jpeg", ".bmp"]:
+        media_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".bmp": "image/bmp"}
+        data = storage.get_document_bytes(doc.filename)
+        return Response(content=data, media_type=media_types.get(ext, "application/octet-stream"))
+    
+    # DOCX/PPTX: extract text content and return
+    if ext in [".docx", ".pptx"]:
+        local_path = storage.get_document_local_path(doc.filename)
+        content = parse_document(local_path, doc.filename)
+        return JSONResponse({"type": ext.lstrip("."), "filename": doc.filename, "content": content})
 
 @app.post("/assistants/{assistant_id}/sessions/")
 def create_session(assistant_id: str, db: Session = Depends(get_db)):
@@ -313,14 +370,19 @@ async def send_chat_message(session_id: str, request: dict, db: Session = Depend
     chat_session.title = query[:30] + "..." if len(history_records) == 0 else chat_session.title
     db.commit()
 
-    return {"reply": response_text, "citations": citations}
+    return {"reply": response_text, "citations": citations, "created_at": (ai_msg.created_at.isoformat() + "Z") if ai_msg.created_at else (datetime.utcnow().isoformat() + "Z")}
 
 @app.get("/sessions/{session_id}/history/")
 def get_session_history(session_id: str, db: Session = Depends(get_db)):
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
     res = []
     for m in messages:
-        res.append({"role": m.role, "content": m.content, "citations": json.loads(m.citations) if m.citations else []})
+        res.append({
+            "role": m.role, 
+            "content": m.content, 
+            "citations": json.loads(m.citations) if m.citations else [],
+            "created_at": (m.created_at.isoformat() + "Z") if m.created_at else None
+        })
     return res
 
 @app.delete("/sessions/{session_id}")

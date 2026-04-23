@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, ArrowRight, Zap, Sparkles, ImageIcon, ArrowDown } from 'lucide-react';
+import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, ArrowRight, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb } from 'lucide-react';
 
 interface Assistant {
   id: string;
@@ -27,6 +27,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   citations?: string[];
+  created_at?: string;
 }
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
   // Modals & Tabs
   const [activeTab, setActiveTab] = useState<'chat' | 'docs'>('chat');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [wizardStep, setWizardStep] = useState(0);
   const [showEditModal, setShowEditModal] = useState(false);
   const [assistantToDelete, setAssistantToDelete] = useState<Assistant | null>(null);
   const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null);
@@ -59,13 +61,42 @@ export default function App() {
   const [newAsstImage, setNewAsstImage] = useState<File | null>(null);
   const [editAsstImage, setEditAsstImage] = useState<File | null>(null);
   const [removeEditImage, setRemoveEditImage] = useState(false);
-  const [generatingAvatar, setGeneratingAvatar] = useState(false);
+  const [generatingAssistantId, setGeneratingAssistantId] = useState<string | null>(null);
+  const [showCancelAvatarModal, setShowCancelAvatarModal] = useState(false);
+  const [showSaveWhileGeneratingModal, setShowSaveWhileGeneratingModal] = useState(false);
+  const [generationTime, setGenerationTime] = useState(0);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  
+  const [toastConfig, setToastConfig] = useState<{
+    type: 'success' | 'info' | 'error', 
+    title: string, 
+    description: string,
+    action?: { label: string, onClick: () => void }
+  } | null>(null);
+
+  const [pendingEdits, setPendingEdits] = useState<Record<string, {
+    config: { id: string, name: string, description: string, instructions: string, image_url: string },
+    imageFile: File | null,
+    removeImage: boolean
+  }>>({});
+
+  const showToast = (type: 'success' | 'info' | 'error', title: string, description: string, action?: { label: string, onClick: () => void }) => {
+    setToastConfig({ type, title, description, action });
+    // If it has an action, maybe keep it longer or until dismissed? Let's keep the timeout but increase to 5s if there is an action.
+    setTimeout(() => setToastConfig(null), action ? 8000 : 3000);
+  };
+
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [previewDoc, setPreviewDoc] = useState<{id: string, filename: string} | null>(null);
+  const [previewContent, setPreviewContent] = useState<{type: string, filename: string, content?: string, blobUrl?: string} | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const newAvatarInputRef = useRef<HTMLInputElement>(null);
   const editAvatarInputRef = useRef<HTMLInputElement>(null);
+  const isAutoScrollingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Initialization
   useEffect(() => {
@@ -79,6 +110,26 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  // Generation Timer
+  useEffect(() => {
+    let generationTimer: ReturnType<typeof setInterval>;
+    if (generatingAssistantId) {
+      setGenerationTime(0);
+      generationTimer = setInterval(() => {
+        setGenerationTime(prev => prev + 1);
+      }, 1000);
+    } else {
+      setGenerationTime(0);
+    }
+    return () => clearInterval(generationTimer);
+  }, [generatingAssistantId]);
+
+  const formatGenerationTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Update when assistant selected
   useEffect(() => {
@@ -99,12 +150,23 @@ export default function App() {
   }, [selectedSession]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (isAutoScrollingRef.current) {
+      clearTimeout((isAutoScrollingRef as any).timeout);
+      (isAutoScrollingRef as any).timeout = setTimeout(() => {
+        isAutoScrollingRef.current = false;
+        setShowScrollButton(false);
+      }, 300);
+      return;
+    }
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
     setShowScrollButton(!isNearBottom);
   };
 
   const scrollToBottom = () => {
+    isAutoScrollingRef.current = true;
+    setShowScrollButton(false);
+    (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
@@ -137,18 +199,70 @@ export default function App() {
       const res = await fetch('/api/assistants/', { method: 'POST', body: formData });
       if (res.ok) {
         setShowAddModal(false);
+        setWizardStep(0);
         setNewAsstConfig({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
         setNewAsstImage(null);
         fetchAssistants();
+        showToast('success', 'Assistant Created', `${newAsstConfig.name} has been successfully created.`);
       }
     } catch (e) {
       console.error(e);
+      showToast('error', 'Creation Failed', 'There was an error creating the assistant.');
     }
+  };
+  // Sync edits to pending background state so they aren't lost
+  useEffect(() => {
+    if (showEditModal && editAsstConfig.id) {
+      setPendingEdits(prev => ({
+        ...prev,
+        [editAsstConfig.id]: {
+          config: editAsstConfig,
+          imageFile: editAsstImage,
+          removeImage: removeEditImage
+        }
+      }));
+    }
+  }, [editAsstConfig, editAsstImage, removeEditImage, showEditModal]);
+
+  const deleteTempAvatar = (file: File | null) => {
+    if (file && (file as any).tempUrl) {
+      const filename = (file as any).tempUrl.split('/').pop();
+      if (filename) fetch(`/api/avatars/${filename}`, { method: 'DELETE' }).catch(console.error);
+    }
+  };
+
+  const discardPendingEdits = (assistantId: string) => {
+    const edit = pendingEdits[assistantId];
+    if (edit?.imageFile) deleteTempAvatar(edit.imageFile);
+    setPendingEdits(prev => {
+      const copy = { ...prev };
+      delete copy[assistantId];
+      return copy;
+    });
+    setShowEditModal(false);
   };
 
   const handleUpdateAssistant = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editAsstConfig.name || !editAsstConfig.instructions) return;
+
+    if (generatingAssistantId === editAsstConfig.id) {
+      setShowSaveWhileGeneratingModal(true);
+      return;
+    }
+
+    const originalAsst = assistants.find(a => a.id === editAsstConfig.id);
+    const hasChanges = editAsstImage !== null ||
+      removeEditImage !== false ||
+      originalAsst?.name !== editAsstConfig.name ||
+      (originalAsst?.description || '') !== editAsstConfig.description ||
+      originalAsst?.instructions !== editAsstConfig.instructions;
+
+    if (!hasChanges) {
+      showToast('info', 'No Changes Made', 'Your assistant configuration was already up to date.');
+      setShowEditModal(false);
+      return;
+    }
 
     const formData = new FormData();
     formData.append('name', editAsstConfig.name);
@@ -165,6 +279,9 @@ export default function App() {
       const res = await fetch(`/api/assistants/${editAsstConfig.id}`, { method: 'PUT', body: formData });
       if (res.ok) {
         setShowEditModal(false);
+        if (editAsstImage && (editAsstImage as any).tempUrl) {
+          deleteTempAvatar(editAsstImage);
+        }
         setEditAsstImage(null);
         setRemoveEditImage(false);
         fetchAssistants();
@@ -172,46 +289,135 @@ export default function App() {
           const updated = await res.json();
           setSelectedAssistant(updated);
         }
+        setPendingEdits(prev => {
+          const copy = { ...prev };
+          delete copy[editAsstConfig.id];
+          return copy;
+        });
+        showToast('success', 'Changes Saved', 'Assistant configuration updated successfully.');
       }
     } catch (e) {
       console.error(e);
+      showToast('error', 'Update Failed', 'There was an error updating the assistant.');
     }
   };
 
   const handleEditAssistantClick = (assistant: Assistant, e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditAsstConfig({
-      id: assistant.id,
-      name: assistant.name,
-      description: assistant.description || '',
-      instructions: assistant.instructions,
-      image_url: assistant.image_url || ''
-    });
-    setEditAsstImage(null);
-    setRemoveEditImage(false);
+    
+    // Restore any pending edits for this assistant if they exist
+    if (pendingEdits[assistant.id]) {
+      setEditAsstConfig(pendingEdits[assistant.id].config);
+      setEditAsstImage(pendingEdits[assistant.id].imageFile);
+      setRemoveEditImage(pendingEdits[assistant.id].removeImage);
+    } else {
+      setEditAsstConfig({
+        id: assistant.id,
+        name: assistant.name,
+        description: assistant.description || '',
+        instructions: assistant.instructions,
+        image_url: assistant.image_url || ''
+      });
+      setEditAsstImage(null);
+      setRemoveEditImage(false);
+    }
+    
     setShowEditModal(true);
   };
 
-  const handleGenerateAvatar = async (assistantId: string) => {
-    setGeneratingAvatar(true);
+  const handlePreviewDocument = async (doc: {id: string, filename: string}) => {
+    setPreviewDoc(doc);
+    setPreviewLoading(true);
+    setPreviewContent(null);
+    const ext = doc.filename.split('.').pop()?.toLowerCase() || '';
     try {
-      const res = await fetch(`/api/assistants/${assistantId}/avatar/generate`, { method: 'POST' });
-      if (res.ok) {
+      const res = await fetch(`/api/documents/${doc.id}/preview`);
+      if (!res.ok) throw new Error('Failed to load preview');
+      if (['md', 'txt', 'csv', 'docx', 'pptx'].includes(ext)) {
         const data = await res.json();
-        setEditAsstConfig(prev => ({ ...prev, image_url: data.image_url }));
-        fetchAssistants();
-        if (selectedAssistant?.id === assistantId) {
-          setSelectedAssistant(prev => prev ? { ...prev, image_url: data.image_url } : prev);
-        }
-      } else {
-        const err = await res.json();
-        alert(err.detail || 'Failed to generate avatar');
+        setPreviewContent({ type: data.type, filename: data.filename, content: data.content });
+      } else if (ext === 'pdf') {
+        const blob = await res.blob();
+        setPreviewContent({ type: 'pdf', filename: doc.filename, blobUrl: URL.createObjectURL(blob) });
+      } else if (['png', 'jpg', 'jpeg', 'bmp'].includes(ext)) {
+        const blob = await res.blob();
+        setPreviewContent({ type: 'image', filename: doc.filename, blobUrl: URL.createObjectURL(blob) });
       }
     } catch (e) {
       console.error(e);
-      alert('Failed to generate avatar');
+      setPreviewContent({ type: 'error', filename: doc.filename, content: 'Failed to load file preview.' });
     } finally {
-      setGeneratingAvatar(false);
+      setPreviewLoading(false);
+    }
+  };
+
+  const closePreview = () => {
+    if (previewContent?.blobUrl) URL.revokeObjectURL(previewContent.blobUrl);
+    setPreviewDoc(null);
+    setPreviewContent(null);
+  };
+
+  const handleGenerateAvatar = async (assistantId: string) => {
+    if (generatingAssistantId && generatingAssistantId !== assistantId) {
+      showToast('error', 'Generation in Progress', 'An avatar is already being generated for another assistant.');
+      return;
+    }
+
+    setGeneratingAssistantId(assistantId);
+    abortControllerRef.current = new AbortController();
+    try {
+      const res = await fetch(`/api/assistants/${assistantId}/avatar/generate`, {
+        method: 'POST',
+        signal: abortControllerRef.current.signal
+      });
+      if (res.ok) {
+        const data = await res.json();
+
+        // Fetch the temporary image to stick it into our File state
+        const imgRes = await fetch(data.image_url);
+        const blob = await imgRes.blob();
+        const file = new File([blob], 'generated_avatar.png', { type: blob.type || 'image/png' });
+        (file as any).tempUrl = data.image_url;
+
+        setPendingEdits(prev => ({
+          ...prev,
+          [assistantId]: {
+            config: prev[assistantId]?.config || editAsstConfig,
+            imageFile: file,
+            removeImage: false
+          }
+        }));
+
+        setEditAsstImage(prev => {
+          // Only update the live modal if they are still looking at the same assistant
+          if (editAsstConfig.id === assistantId) {
+            setRemoveEditImage(false);
+            return file;
+          }
+          return prev;
+        });
+
+        showToast('success', 'Generation Complete', 'Your new avatar is ready to review.', {
+          label: 'Review',
+          onClick: () => {
+            const assistant = assistants.find(a => a.id === assistantId);
+            if (assistant) handleEditAssistantClick(assistant, {} as any);
+          }
+        });
+      } else {
+        const err = await res.json();
+        showToast('error', 'Generation Failed', err.detail || 'Failed to generate avatar');
+      }
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        console.log('Avatar generation aborted by user.');
+        return;
+      }
+      console.error(e);
+      showToast('error', 'Generation Failed', 'Failed to generate avatar');
+    } finally {
+      setGeneratingAssistantId(null);
+      abortControllerRef.current = null;
     }
   };
 
@@ -223,11 +429,15 @@ export default function App() {
   const confirmDeleteAssistant = async () => {
     if (!assistantToDelete) return;
     try {
-      await fetch(`/api/assistants/${assistantToDelete.id}`, { method: 'DELETE' });
-      if (selectedAssistant?.id === assistantToDelete.id) setSelectedAssistant(null);
-      fetchAssistants();
+      const res = await fetch(`/api/assistants/${assistantToDelete.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (selectedAssistant?.id === assistantToDelete.id) setSelectedAssistant(null);
+        fetchAssistants();
+        showToast('success', 'Assistant Deleted', `Successfully deleted ${assistantToDelete.name}.`);
+      }
     } catch (e) {
       console.error(e);
+      showToast('error', 'Deletion Failed', 'There was an error deleting the assistant.');
     }
     setAssistantToDelete(null);
   };
@@ -240,14 +450,18 @@ export default function App() {
   const confirmDeleteSession = async () => {
     if (!sessionToDelete || !selectedAssistant) return;
     try {
-      await fetch(`/api/sessions/${sessionToDelete.id}`, { method: 'DELETE' });
-      if (selectedSession?.id === sessionToDelete.id) {
-        setSelectedSession(null);
-        setMessages([]);
+      const res = await fetch(`/api/sessions/${sessionToDelete.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (selectedSession?.id === sessionToDelete.id) {
+          setSelectedSession(null);
+          setMessages([]);
+        }
+        fetchSessions(selectedAssistant.id);
+        showToast('success', 'Chat Deleted', 'The conversation has been removed.');
       }
-      fetchSessions(selectedAssistant.id);
     } catch (e) {
       console.error(e);
+      showToast('error', 'Deletion Failed', 'There was an error deleting the conversation.');
     }
     setSessionToDelete(null);
   };
@@ -279,9 +493,12 @@ export default function App() {
       const res = await fetch(`/api/sessions/${sessionId}/history/`);
       const data = await res.json();
       setMessages(data);
+      isAutoScrollingRef.current = true;
+      setShowScrollButton(false);
+      (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      }, 50);
     } catch (e) {
       console.error(e);
     }
@@ -311,15 +528,17 @@ export default function App() {
       const formData = new FormData();
       formData.append('file', file);
       try {
-        await fetch(`/api/assistants/${selectedAssistant.id}/documents/`, { method: 'POST', body: formData });
+        const res = await fetch(`/api/assistants/${selectedAssistant.id}/documents/`, { method: 'POST', body: formData });
+        if (!res.ok) throw new Error();
       } catch (err) {
-        console.error(`Failed to upload ${file.name}`);
+        showToast('error', 'Upload Failed', `Failed to upload ${file.name}`);
       }
     }
 
     setUploading(false);
     fetchDocuments(selectedAssistant.id);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    showToast('success', 'Files Uploaded', 'Your documents have been processed.');
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -357,10 +576,14 @@ export default function App() {
   const confirmDeleteDocument = async () => {
     if (!documentToDelete) return;
     try {
-      await fetch(`/api/documents/${documentToDelete.id}`, { method: 'DELETE' });
-      if (selectedAssistant) fetchDocuments(selectedAssistant.id);
+      const res = await fetch(`/api/documents/${documentToDelete.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (selectedAssistant) fetchDocuments(selectedAssistant.id);
+        showToast('success', 'File Deleted', `Removed ${documentToDelete.filename} from the knowledge base.`);
+      }
     } catch (e) {
       console.error(e);
+      showToast('error', 'Deletion Failed', 'There was an error deleting the file.');
     }
     setDocumentToDelete(null);
   };
@@ -371,8 +594,17 @@ export default function App() {
 
     const userMessage = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    const userCreatedAt = new Date().toISOString();
+    setMessages(prev => [...prev, { role: 'user', content: userMessage, created_at: userCreatedAt }]);
     setIsLoading(true);
+
+    // Auto-scroll instantly when user sends message
+    isAutoScrollingRef.current = true;
+    setShowScrollButton(false);
+    (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 50);
 
     try {
       const response = await fetch(`/api/sessions/${selectedSession.id}/chat/`, {
@@ -383,18 +615,53 @@ export default function App() {
 
       if (!response.ok) throw new Error('API Error');
       const data = await response.json();
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply, citations: data.citations }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: data.reply, citations: data.citations, created_at: data.created_at }]);
 
       // Refresh sessions to get updated title
       if (selectedAssistant) fetchSessions(selectedAssistant.id);
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I encountered an error. Please try again." }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I encountered an error. Please try again.", created_at: new Date().toISOString() }]);
     } finally {
       setIsLoading(false);
+      // Auto-scroll again when AI finishes replying
+      isAutoScrollingRef.current = true;
+      setShowScrollButton(false);
+      (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      }, 50);
     }
+  };
+
+  // ---- Helpers ----
+  const getDateGroup = (dateStr?: string) => {
+    if (!dateStr) return null;
+    const date = new Date(dateStr);
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Paris', year: 'numeric', month: 'numeric', day: 'numeric' }).format(date);
+  };
+
+  const formatDateSeparator = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const targetGroup = getDateGroup(dateStr);
+
+    const now = new Date();
+    const todayGroup = getDateGroup(now.toISOString());
+
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayGroup = getDateGroup(yesterday.toISOString());
+
+    if (targetGroup === todayGroup) return 'Today';
+    if (targetGroup === yesterdayGroup) return 'Yesterday';
+
+    const date = new Date(dateStr);
+    return new Intl.DateTimeFormat(undefined, { timeZone: 'Europe/Paris', month: 'long', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined }).format(date);
+  };
+
+  const formatTime = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleTimeString(undefined, { timeZone: 'Europe/Paris', hour: 'numeric', minute: '2-digit' });
   };
 
   // ---- Renders ----
@@ -415,65 +682,65 @@ export default function App() {
 
       {/* Global Sidebar (Assistants) - hidden on homepage */}
       {selectedAssistant && (
-      <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-        <div className="h-[76px] px-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between shrink-0">
-          <button onClick={() => { setSelectedAssistant(null); setSidebarOpen(false); }} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-            <Library className="text-indigo-400" size={24} />
-            <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
-          </button>
-          <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
-        </div>
+        <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+          <div className="h-[76px] px-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between shrink-0">
+            <button onClick={() => { setSelectedAssistant(null); setSidebarOpen(false); }} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+              <Library className="text-indigo-400" size={24} />
+              <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
+            </button>
+            <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
+          </div>
 
-        <div className="p-4">
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors text-sm"
-          >
-            <Plus size={16} /> New Assistant
-          </button>
-        </div>
+          <div className="p-4">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors text-sm"
+            >
+              <Plus size={16} /> New Assistant
+            </button>
+          </div>
 
-        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
-          <div className="px-3 pt-2 pb-1 text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Your Assistants</div>
-          {assistants.length === 0 ? (
-            <div className="px-3 py-4 text-sm text-slate-600 dark:text-slate-400 italic text-center">No assistants created yet.</div>
-          ) : (
-            assistants.map(a => (
-              <div
-                key={a.id}
-                onClick={() => setSelectedAssistant(a)}
-                className={`w-full text-left px-3 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3 overflow-hidden">
-                  {a.image_url ? (
-                    <img src={a.image_url} alt={a.name} className="w-7 h-7 rounded-lg object-cover shrink-0" />
-                  ) : (
-                    <Bot size={18} className={selectedAssistant?.id === a.id ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 group-hover:text-indigo-500"} />
-                  )}
-                  <div className="truncate">
-                    <div className="text-sm font-medium truncate">{a.name}</div>
+          <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+            <div className="px-3 pt-2 pb-1 text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Your Assistants</div>
+            {assistants.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-slate-600 dark:text-slate-400 italic text-center">No assistants created yet.</div>
+            ) : (
+              assistants.map(a => (
+                <div
+                  key={a.id}
+                  onClick={() => setSelectedAssistant(a)}
+                  className={`w-full text-left px-3 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'}`}
+                >
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    {a.image_url ? (
+                      <img src={a.image_url} alt={a.name} className="w-7 h-7 rounded-lg object-cover shrink-0" />
+                    ) : (
+                      <Bot size={18} className={selectedAssistant?.id === a.id ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 group-hover:text-indigo-500"} />
+                    )}
+                    <div className="truncate">
+                      <div className="text-sm font-medium truncate">{a.name}</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <button onClick={(e) => handleEditAssistantClick(a, e)} className="p-1 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-300 dark:hover:bg-slate-700 rounded transition-all">
+                      <Edit2 size={14} />
+                    </button>
+                    <button onClick={(e) => handleDeleteAssistant(a, e)} className="p-1 text-slate-600 dark:text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all">
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                  <button onClick={(e) => handleEditAssistantClick(a, e)} className="p-1 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-300 dark:hover:bg-slate-700 rounded transition-all">
-                    <Edit2 size={14} />
-                  </button>
-                  <button onClick={(e) => handleDeleteAssistant(a, e)} className="p-1 text-slate-600 dark:text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-        
-        <div className="p-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
-          <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="w-full flex items-center justify-center gap-2 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors text-sm font-medium">
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />} 
-            {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
-          </button>
-        </div>
-      </aside>
+              ))
+            )}
+          </div>
+
+          <div className="p-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="w-full flex items-center justify-center gap-2 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors text-sm font-medium">
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+            </button>
+          </div>
+        </aside>
       )}
 
       {/* Main Content Area */}
@@ -543,7 +810,7 @@ export default function App() {
                           </button>
                         </div>
                         <div className={`text-[10px] mt-0.5 ${selectedSession?.id === s.id ? 'text-indigo-400/70' : 'text-slate-500'}`}>
-                          {s.updated_at ? new Date(s.updated_at + 'Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                          {s.updated_at ? new Date(s.updated_at + 'Z').toLocaleDateString('en-US', { timeZone: 'Europe/Paris', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}
                         </div>
                       </div>
                     ))}
@@ -552,7 +819,7 @@ export default function App() {
 
                 {/* Right Area: Chat Window */}
                 <div className={`flex-1 flex flex-col bg-white dark:bg-slate-900 relative min-w-0 ${!selectedSession ? 'hidden md:flex' : 'flex'}`}>
-                  
+
                   {/* Desktop Sidebar Toggle */}
                   <div className="hidden md:flex absolute top-0 left-0 z-20">
                     <button onClick={() => setShowChatsPane(!showChatsPane)} className="p-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 border-t-0 border-l-0 rounded-br-md text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all shadow-sm" title="Toggle Sidebar">
@@ -575,7 +842,7 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth w-full relative" onScroll={handleScroll}>
+                      <div className="flex-1 overflow-y-auto p-4 md:p-8 w-full relative" onScroll={handleScroll}>
                         <div className="max-w-3xl mx-auto space-y-8 pb-32">
                           {messages.length === 0 && (
                             <div className="flex flex-col items-center text-center mt-20 text-slate-500">
@@ -593,39 +860,64 @@ export default function App() {
                                 cleanContent = cleanContent.replace(regex, '');
                               });
                             }
-                            
-                            return (
-                            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                              <div className={`max-w-[95%] md:max-w-[85%] rounded-2xl px-4 md:px-5 py-3 md:py-4 min-w-0 overflow-x-auto ${msg.role === 'user'
-                                ? 'bg-indigo-600 text-white rounded-br-none shadow-sm'
-                                : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none shadow-sm'
-                                }`}>
-                                {msg.role === 'user' ? (
-                                  <div className="whitespace-pre-wrap leading-relaxed text-[15px] break-words">{cleanContent}</div>
-                                ) : (
-                                  <div className="text-[15px] leading-relaxed prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-indigo-600 dark:prose-code:text-indigo-300 break-words prose-pre:max-w-full">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                      {cleanContent}
-                                    </ReactMarkdown>
-                                  </div>
-                                )}
 
-                                {msg.citations && msg.citations.length > 0 && (
-                                  <div className="mt-4 pt-3 border-t border-slate-200/60 border-slate-200/60 dark:border-slate-800/60">
-                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Grounded Sources</span>
-                                    <div className="flex flex-wrap gap-1.5">
-                                      {msg.citations.map((cite, i) => (
-                                        <span key={i} className="inline-flex items-center px-2 py-1 rounded bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-medium">
-                                          <FileText size={10} className="mr-1 text-indigo-400" />
-                                          {cite}
-                                        </span>
-                                      ))}
-                                    </div>
+                            let showDateSeparator = false;
+                            let dateSeparatorText = '';
+                            if (msg.created_at) {
+                              const currentGroup = getDateGroup(msg.created_at);
+                              const prevGroup = index > 0 ? getDateGroup(messages[index - 1].created_at) : null;
+                              if (currentGroup && currentGroup !== prevGroup) {
+                                showDateSeparator = true;
+                                dateSeparatorText = formatDateSeparator(msg.created_at);
+                              }
+                            }
+
+                            return (
+                              <React.Fragment key={index}>
+                                {showDateSeparator && (
+                                  <div className="flex justify-center my-6">
+                                    <span className="text-[11px] font-medium text-slate-500 bg-slate-100 dark:bg-slate-800/60 px-3 py-1 rounded-full uppercase tracking-wider">{dateSeparatorText}</span>
                                   </div>
                                 )}
-                              </div>
-                            </div>
-                          )})}
+                                <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                  <div className={`max-w-[95%] md:max-w-[85%] rounded-2xl px-4 md:px-5 py-3 md:py-4 min-w-0 overflow-x-auto ${msg.role === 'user'
+                                    ? 'bg-indigo-600 text-white rounded-br-none shadow-sm'
+                                    : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none shadow-sm'
+                                    }`}>
+                                    {msg.role === 'user' ? (
+                                      <div className="whitespace-pre-wrap leading-relaxed text-[15px] break-words">{cleanContent}</div>
+                                    ) : (
+                                      <div className="text-[15px] leading-relaxed prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-indigo-600 dark:prose-code:text-indigo-300 break-words prose-pre:max-w-full">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                          {cleanContent}
+                                        </ReactMarkdown>
+                                      </div>
+                                    )}
+
+                                    {msg.citations && msg.citations.length > 0 && (
+                                      <div className="mt-4 pt-3 border-t border-slate-200/60 border-slate-200/60 dark:border-slate-800/60">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Grounded Sources</span>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {msg.citations.map((cite, i) => (
+                                            <span key={i} className="inline-flex items-center px-2 py-1 rounded bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-medium">
+                                              <FileText size={10} className="mr-1 text-indigo-400" />
+                                              {cite}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {msg.created_at && (
+                                      <div className={`text-[10px] mt-2 font-medium ${msg.role === 'user' ? 'text-indigo-200 text-right' : 'text-slate-400 dark:text-slate-500 text-left'}`}>
+                                        {formatTime(msg.created_at)}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </React.Fragment>
+                            )
+                          })}
 
                           {isLoading && (
                             <div className="flex justify-start">
@@ -641,7 +933,7 @@ export default function App() {
 
                       {/* Chat Input */}
                       <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-white dark:from-slate-950 via-white/80 dark:via-slate-950/80 to-transparent pt-32 pb-4 md:pb-6 px-3 md:px-8 pointer-events-none">
-                        
+
                         <div className="max-w-3xl mx-auto relative pointer-events-auto">
                           {showScrollButton && (
                             <div className="absolute -top-14 left-1/2 -translate-x-1/2 flex justify-center w-full z-20">
@@ -656,20 +948,20 @@ export default function App() {
                           <form onSubmit={handleSend} className="relative flex items-end overflow-hidden rounded-2xl bg-white dark:bg-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.08)] border border-slate-200 dark:border-slate-800 focus-within:border-indigo-400 dark:focus-within:border-indigo-500/50 focus-within:ring-2 focus-within:ring-indigo-100 dark:focus-within:ring-indigo-500/20 transition-all min-w-0">
                             <textarea
                               value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
-                            placeholder={`Ask ${selectedAssistant.name}...`}
-                            className="px-4 md:px-5 py-3 md:py-4 w-full bg-transparent border-0 focus:ring-0 resize-none max-h-48 outline-none text-slate-800 dark:text-slate-200 placeholder-slate-500 dark:placeholder-gray-400 text-[15px] min-w-0"
-                            rows={input.split('\n').length > 1 ? Math.min(input.split('\n').length, 5) : 1}
-                            style={{ minHeight: '56px' }}
-                          />
-                          <button type="submit" disabled={!input.trim() || isLoading} className="absolute right-2 bottom-2 p-2.5 rounded-xl bg-indigo-600 text-white disabled:bg-slate-200 dark:disabled:bg-slate-200 dark:disabled:bg-slate-700 disabled:text-slate-500 hover:bg-indigo-500 transition-colors shadow-sm">
-                            <Send size={16} />
-                          </button>
-                        </form>
-                        <div className="text-center mt-2">
-                          <span className="text-[11px] text-slate-500 font-medium tracking-wide">Assistant contextualizes strictly off uploaded files.</span>
-                        </div>
+                              onChange={(e) => setInput(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
+                              placeholder={`Ask ${selectedAssistant.name}...`}
+                              className="px-4 md:px-5 py-3 md:py-4 w-full bg-transparent border-0 focus:ring-0 resize-none max-h-48 outline-none text-slate-800 dark:text-slate-200 placeholder-slate-500 dark:placeholder-gray-400 text-[15px] min-w-0"
+                              rows={input.split('\n').length > 1 ? Math.min(input.split('\n').length, 5) : 1}
+                              style={{ minHeight: '56px' }}
+                            />
+                            <button type="submit" disabled={!input.trim() || isLoading} className="absolute right-2 bottom-2 p-2.5 rounded-xl bg-indigo-600 text-white disabled:bg-slate-200 dark:disabled:bg-slate-200 dark:disabled:bg-slate-700 disabled:text-slate-500 hover:bg-indigo-500 transition-colors shadow-sm">
+                              <Send size={16} />
+                            </button>
+                          </form>
+                          <div className="text-center mt-2">
+                            <span className="text-[11px] text-slate-500 font-medium tracking-wide">Assistant contextualizes strictly off uploaded files.</span>
+                          </div>
                         </div>
                       </div>
                     </>
@@ -718,18 +1010,23 @@ export default function App() {
                       <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
                         <div className="bg-slate-100 dark:bg-slate-950 px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">
                           <div className="flex-1">Filename</div>
-                          <div className="w-16 text-right">Action</div>
+                          <div className="w-24 text-right">Actions</div>
                         </div>
                         <ul className="divide-y divide-slate-200 dark:divide-slate-800/80 bg-white dark:bg-slate-900">
                           {documents.map(doc => (
                             <li key={doc.id} className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                               <div className="flex items-center gap-3 overflow-hidden">
-                                <FileText size={16} className="text-indigo-1000 shrink-0" />
-                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">{doc.filename}</span>
+                                <FileText size={16} className="text-indigo-500 shrink-0" />
+                                <button onClick={() => handlePreviewDocument(doc)} className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-left" title="Preview file">{doc.filename}</button>
                               </div>
-                              <button onClick={() => handleDeleteDocument(doc)} className="p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-md transition-colors">
-                                <Trash2 size={16} />
-                              </button>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button onClick={() => handlePreviewDocument(doc)} className="p-1.5 text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 rounded-md transition-colors" title="Preview">
+                                  <Eye size={16} />
+                                </button>
+                                <button onClick={() => handleDeleteDocument(doc)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-md transition-colors" title="Delete">
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             </li>
                           ))}
                         </ul>
@@ -765,7 +1062,7 @@ export default function App() {
 
             {/* Homepage Content */}
             <div className="max-w-5xl mx-auto px-4 md:px-8 py-12 md:py-16">
-              
+
               {/* Hero Section */}
               <div className="text-center mb-12 md:mb-16">
                 <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl border border-indigo-200 dark:border-indigo-500/20 shadow-[0_0_30px_rgba(99,102,241,0.1)] dark:shadow-[0_0_30px_rgba(99,102,241,0.15)] flex items-center justify-center mx-auto mb-6">
@@ -842,25 +1139,33 @@ export default function App() {
                 <div className="flex items-center gap-4">
                   <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
                     {editAsstImage ? (
-                      <img src={URL.createObjectURL(editAsstImage)} alt="Preview" className="w-full h-full object-cover" />
+                      <img src={URL.createObjectURL(editAsstImage)} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(URL.createObjectURL(editAsstImage))} />
                     ) : editAsstConfig.image_url && !removeEditImage ? (
-                      <img src={editAsstConfig.image_url} alt="Avatar" className="w-full h-full object-cover" />
+                      <img src={editAsstConfig.image_url} alt="Avatar" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(editAsstConfig.image_url!)} />
                     ) : (
                       <Bot size={28} className="text-slate-400" />
                     )}
                   </div>
                   <div className="flex flex-col gap-2">
                     <div className="flex gap-2">
-                      <input type="file" ref={editAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) { setEditAsstImage(e.target.files[0]); setRemoveEditImage(false); } }} />
+                      <input type="file" ref={editAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) { deleteTempAvatar(editAsstImage); setEditAsstImage(e.target.files[0]); setRemoveEditImage(false); } }} />
                       <button type="button" onClick={() => editAvatarInputRef.current?.click()} className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1.5">
                         <ImageIcon size={14} /> Upload
                       </button>
-                      <button type="button" onClick={() => handleGenerateAvatar(editAsstConfig.id)} disabled={generatingAvatar} className="px-3 py-1.5 text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
-                        {generatingAvatar ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate
+                      <button type="button" onClick={() => handleGenerateAvatar(editAsstConfig.id)} disabled={generatingAssistantId !== null} className={`px-3 py-1.5 text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg transition-colors flex items-center gap-1.5 ${generatingAssistantId !== null ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-100 dark:hover:bg-indigo-900/50'}`}>
+                        {generatingAssistantId === editAsstConfig.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate
                       </button>
+                      {generatingAssistantId === editAsstConfig.id && (
+                        <div className="flex items-center gap-2 ml-1">
+                          <span className="text-xs text-slate-500 font-mono bg-slate-100 dark:bg-slate-800 px-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-700">{formatGenerationTime(generationTime)}</span>
+                          <button type="button" onClick={() => { abortControllerRef.current?.abort(); }} className="px-2.5 py-1.5 text-xs font-medium bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20 rounded-lg transition-colors flex items-center gap-1">
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                     </div>
                     {(editAsstConfig.image_url || editAsstImage) && !removeEditImage && (
-                      <button type="button" onClick={() => { setRemoveEditImage(true); setEditAsstImage(null); }} className="text-xs text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors text-left">
+                      <button type="button" onClick={() => { deleteTempAvatar(editAsstImage); setRemoveEditImage(true); setEditAsstImage(null); }} className="text-xs text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors text-left">
                         Remove image
                       </button>
                     )}
@@ -881,7 +1186,7 @@ export default function App() {
                 <textarea required value={editAsstConfig.instructions} onChange={e => setEditAsstConfig({ ...editAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed" />
               </div>
               <div className="pt-2 flex justify-end gap-3">
-                <button type="button" onClick={() => setShowEditModal(false)} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
+                <button type="button" onClick={() => discardPendingEdits(editAsstConfig.id)} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
                 <button type="submit" disabled={!editAsstConfig.name || !editAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all">Save Changes</button>
               </div>
             </form>
@@ -889,63 +1194,186 @@ export default function App() {
         </div>
       )}
 
-      {/* CREATE MODAL */}
-      {showAddModal && (
+      {/* CREATION WIZARD */}
+      {showAddModal && (() => {
+        const wizardSteps = [
+          { label: 'Basics', icon: <Briefcase size={16} /> },
+          { label: 'Instructions', icon: <BookOpen size={16} /> },
+          { label: 'Avatar', icon: <ImageIcon size={16} /> },
+          { label: 'Review', icon: <Check size={16} /> },
+        ];
+        const instructionTemplates = [
+          { label: 'General Assistant', icon: <Lightbulb size={16} />, value: 'You are a helpful AI assistant. Answer based only on the provided context.' },
+          { label: 'Legal Advisor', icon: <Scale size={16} />, value: 'You are a legal analysis assistant. Provide precise, citation-backed legal interpretations based only on the provided documents. Always clarify that your analysis is informational, not legal advice.' },
+          { label: 'Code Reviewer', icon: <Code size={16} />, value: 'You are a senior code reviewer. Analyze code snippets and documents for bugs, security vulnerabilities, and best-practice violations. Provide actionable suggestions with corrected code examples.' },
+          { label: 'Medical Research', icon: <HeartPulse size={16} />, value: 'You are a medical research assistant. Summarize clinical findings, compare study methodologies, and extract key data points from provided medical documents. Always note limitations and recommend professional consultation.' },
+          { label: 'Academic Tutor', icon: <GraduationCap size={16} />, value: 'You are an academic tutor. Explain concepts from the provided materials in clear, simple language. Use examples, analogies, and step-by-step breakdowns. Ask follow-up questions to check understanding.' },
+          { label: 'Compliance Auditor', icon: <ShieldCheck size={16} />, value: 'You are a compliance and policy auditor. Analyze provided documents against regulatory frameworks and internal policies. Flag non-compliant sections, assess risk levels, and suggest remediation steps.' },
+        ];
+        const canProceed = wizardStep === 0 ? !!newAsstConfig.name.trim() : wizardStep === 1 ? !!newAsstConfig.instructions.trim() : true;
+        return (
         <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Create New Assistant</h2>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:bg-slate-800"><X size={20} /></button>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Header with step indicator */}
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 shrink-0">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Create New Assistant</h2>
+                <button onClick={() => { setShowAddModal(false); setWizardStep(0); setNewAsstImage(null); }} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:hover:bg-slate-800"><X size={20} /></button>
+              </div>
+              {/* Step indicators */}
+              <div className="flex items-center gap-1">
+                {wizardSteps.map((s, i) => (
+                  <React.Fragment key={i}>
+                    <button 
+                      onClick={() => { if (i < wizardStep) setWizardStep(i); }}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        i === wizardStep 
+                          ? 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 shadow-sm' 
+                          : i < wizardStep 
+                            ? 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer' 
+                            : 'text-slate-400 dark:text-slate-600 cursor-default'
+                      }`}
+                    >
+                      {i < wizardStep ? <CheckCircle2 size={14} className="text-emerald-500" /> : s.icon}
+                      <span className="hidden sm:inline">{s.label}</span>
+                    </button>
+                    {i < wizardSteps.length - 1 && (
+                      <div className={`flex-1 h-px mx-1 ${i < wizardStep ? 'bg-emerald-300 dark:bg-emerald-600' : 'bg-slate-200 dark:bg-slate-700'}`} />
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
             </div>
-            <form onSubmit={handleCreateAssistant} className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
-              {/* Avatar Section */}
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Avatar <span className="text-xs text-slate-400 font-normal">(optional)</span></label>
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
-                    {newAsstImage ? (
-                      <img src={URL.createObjectURL(newAsstImage)} alt="Preview" className="w-full h-full object-cover" />
-                    ) : (
-                      <Bot size={28} className="text-slate-400" />
-                    )}
+
+            {/* Step Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* STEP 0: Basics */}
+              {wizardStep === 0 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Basic Information</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Give your assistant an identity. The name is required, but a description helps you distinguish it later.</p>
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <div className="flex gap-2">
-                      <input type="file" ref={newAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) setNewAsstImage(e.target.files[0]); }} />
-                      <button type="button" onClick={() => newAvatarInputRef.current?.click()} className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1.5">
-                        <ImageIcon size={14} /> Upload Image
-                      </button>
-                    </div>
-                    {newAsstImage && (
-                      <button type="button" onClick={() => setNewAsstImage(null)} className="text-xs text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors text-left">
-                        Remove image
-                      </button>
-                    )}
-                    <p className="text-[11px] text-slate-400">You can generate an AI avatar after creation.</p>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span className="text-red-500">*</span></label>
+                    <input autoFocus type="text" value={newAsstConfig.name} onChange={e => setNewAsstConfig({ ...newAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description <span className="text-xs text-slate-400 font-normal">(optional)</span></label>
+                    <textarea value={newAsstConfig.description} onChange={e => setNewAsstConfig({ ...newAsstConfig, description: e.target.value })} rows={3} placeholder="Briefly describe the assistant's purpose and expertise..." className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm leading-relaxed" />
                   </div>
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span className="text-red-500">*</span></label>
-                <input required type="text" value={newAsstConfig.name} onChange={e => setNewAsstConfig({ ...newAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
-                <input type="text" value={newAsstConfig.description} onChange={e => setNewAsstConfig({ ...newAsstConfig, description: e.target.value })} placeholder="Briefly describe its purpose" className="w-full px-4 py-2 border border-slate-300 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">System Instructions <span className="text-red-500">*</span></label>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 mb-2">Define how the AI should behave, its tone, and strict rules.</p>
-                <textarea required value={newAsstConfig.instructions} onChange={e => setNewAsstConfig({ ...newAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 border border-slate-300 dark:border-slate-700 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
-              </div>
-              <div className="pt-2 flex justify-end gap-3">
-                <button type="button" onClick={() => { setShowAddModal(false); setNewAsstImage(null); }} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
-                <button type="submit" disabled={!newAsstConfig.name || !newAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all">Launch Assistant</button>
-              </div>
-            </form>
+              )}
+
+              {/* STEP 1: Instructions */}
+              {wizardStep === 1 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">System Instructions</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Define how your assistant should behave. Choose a preset template or write your own.</p>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {instructionTemplates.map((t, i) => (
+                      <button key={i} type="button" onClick={() => setNewAsstConfig({ ...newAsstConfig, instructions: t.value })} className={`text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center gap-2 ${
+                        newAsstConfig.instructions === t.value
+                          ? 'border-indigo-400 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 shadow-sm ring-1 ring-indigo-200 dark:ring-indigo-500/30'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                      }`}>
+                        {t.icon} {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Custom Instructions <span className="text-red-500">*</span></label>
+                    <textarea value={newAsstConfig.instructions} onChange={e => setNewAsstConfig({ ...newAsstConfig, instructions: e.target.value })} rows={6} className="w-full px-4 py-3 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: Avatar */}
+              {wizardStep === 2 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Avatar</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Upload an image to personalize your assistant. You can also generate an AI avatar after creation from the edit panel.</p>
+                  </div>
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="w-28 h-28 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-600">
+                      {newAsstImage ? (
+                        <img src={URL.createObjectURL(newAsstImage)} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(URL.createObjectURL(newAsstImage))} />
+                      ) : (
+                        <Bot size={40} className="text-slate-400" />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <input type="file" ref={newAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) setNewAsstImage(e.target.files[0]); }} />
+                      <button type="button" onClick={() => newAvatarInputRef.current?.click()} className="px-4 py-2 text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors flex items-center gap-2">
+                        <ImageIcon size={16} /> Upload Image
+                      </button>
+                      {newAsstImage && (
+                        <button type="button" onClick={() => setNewAsstImage(null)} className="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-colors">
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400 text-center">AI avatar generation will be available after creation.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 3: Review */}
+              {wizardStep === 3 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Review & Create</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Verify your assistant's configuration before launching.</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
+                    <div className="flex items-center gap-4 p-4">
+                      <div className="w-14 h-14 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
+                        {newAsstImage ? (
+                          <img src={URL.createObjectURL(newAsstImage)} alt="Avatar" className="w-full h-full object-cover" />
+                        ) : (
+                          <Bot size={24} className="text-slate-400" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="text-base font-semibold text-slate-900 dark:text-white truncate">{newAsstConfig.name}</h4>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 truncate">{newAsstConfig.description || 'No description'}</p>
+                      </div>
+                      <button type="button" onClick={() => setWizardStep(0)} className="ml-auto text-xs text-indigo-600 dark:text-indigo-400 hover:underline shrink-0">Edit</button>
+                    </div>
+                    <div className="p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">System Instructions</span>
+                        <button type="button" onClick={() => setWizardStep(1)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">Edit</button>
+                      </div>
+                      <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono leading-relaxed bg-white dark:bg-slate-900 rounded-lg p-3 border border-slate-100 dark:border-slate-800 max-h-40 overflow-y-auto">{newAsstConfig.instructions}</pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer with navigation */}
+            <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 flex items-center justify-between shrink-0">
+              <button type="button" onClick={() => { if (wizardStep === 0) { setShowAddModal(false); setWizardStep(0); setNewAsstImage(null); } else setWizardStep(wizardStep - 1); }} className="px-4 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors flex items-center gap-1.5">
+                <ChevronLeft size={16} /> {wizardStep === 0 ? 'Cancel' : 'Back'}
+              </button>
+              {wizardStep < 3 ? (
+                <button type="button" disabled={!canProceed} onClick={() => setWizardStep(wizardStep + 1)} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-xl hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all flex items-center gap-1.5">
+                  Next <ChevronRight size={16} />
+                </button>
+              ) : (
+                <button type="button" onClick={(e) => handleCreateAssistant(e)} disabled={!newAsstConfig.name || !newAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all flex items-center gap-1.5">
+                  <Zap size={16} /> Launch Assistant
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* DELETE CONFIRMATION MODAL */}
       {assistantToDelete && (
@@ -1018,6 +1446,195 @@ export default function App() {
                 Yes, Delete
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showCancelAvatarModal && (
+        <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 p-6">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Avatar is generating</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
+              An avatar is currently being generated. What would you like to do?
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  abortControllerRef.current?.abort();
+                  setShowCancelAvatarModal(false);
+                  setShowEditModal(false);
+                }}
+                className="w-full px-4 py-2.5 bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 rounded-lg font-medium text-sm transition-colors text-left flex items-center"
+              >
+                Cancel generation entirely
+              </button>
+              <button
+                onClick={() => {
+                  setShowCancelAvatarModal(false);
+                  setShowEditModal(false);
+                }}
+                className="w-full px-4 py-2.5 bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg font-medium text-sm transition-colors text-left"
+              >
+                Continue generation in background
+              </button>
+              <button
+                onClick={() => setShowCancelAvatarModal(false)}
+                className="w-full px-4 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 rounded-lg font-medium text-sm transition-colors text-center mt-2"
+              >
+                Resume waiting
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SAVE WHILE GENERATING MODAL */}
+      {showSaveWhileGeneratingModal && (
+        <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 p-6 text-center">
+            <Loader2 size={40} className="mx-auto text-indigo-500 animate-spin mb-4" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Generation Running</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
+              An avatar is currently generating. Please wait for it to complete or cancel it before saving your changes.
+            </p>
+            <button
+              onClick={() => setShowSaveWhileGeneratingModal(false)}
+              className="w-full px-4 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 rounded-lg font-medium text-sm transition-colors"
+            >
+              Go Back
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* DOCUMENT FILE PREVIEWER MODAL */}
+      {previewDoc && (
+        <div className="fixed inset-0 bg-slate-900/60 dark:bg-slate-950/70 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-4xl max-h-[90vh] shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50 shrink-0">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <div className="p-2 bg-indigo-50 dark:bg-indigo-500/10 rounded-lg">
+                  <FileText size={18} className="text-indigo-500" />
+                </div>
+                <div className="overflow-hidden">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white truncate">{previewDoc.filename}</h3>
+                  <span className="text-xs text-slate-500 uppercase tracking-wider">{previewDoc.filename.split('.').pop()?.toUpperCase()} File</span>
+                </div>
+              </div>
+              <button onClick={closePreview} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-auto">
+              {previewLoading ? (
+                <div className="flex items-center justify-center h-64">
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 size={32} className="animate-spin text-indigo-500" />
+                    <span className="text-sm text-slate-500">Loading preview...</span>
+                  </div>
+                </div>
+              ) : previewContent?.type === 'error' ? (
+                <div className="flex items-center justify-center h-64">
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <AlertCircle size={32} className="text-red-400" />
+                    <span className="text-sm text-slate-600 dark:text-slate-400">{previewContent.content}</span>
+                  </div>
+                </div>
+              ) : previewContent?.type === 'md' ? (
+                <div className="p-6 md:p-8 prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-indigo-600 dark:prose-code:text-indigo-300 prose-headings:text-slate-900 dark:prose-headings:text-white">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {previewContent.content || ''}
+                  </ReactMarkdown>
+                </div>
+              ) : previewContent?.type === 'csv' ? (
+                <div className="p-6 overflow-x-auto">
+                  <table className="w-full text-sm border-collapse">
+                    {previewContent.content?.split('\n').filter(Boolean).map((row, i) => (
+                      <tr key={i} className={i === 0 ? 'bg-slate-100 dark:bg-slate-800 font-semibold' : 'border-t border-slate-200 dark:border-slate-800'}>
+                        {row.split(',').map((cell, j) => (
+                          i === 0
+                            ? <th key={j} className="px-4 py-2.5 text-left text-xs uppercase tracking-wider text-slate-600 dark:text-slate-400">{cell.trim()}</th>
+                            : <td key={j} className="px-4 py-2.5 text-slate-700 dark:text-slate-300">{cell.trim()}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </table>
+                </div>
+              ) : previewContent?.type === 'pdf' ? (
+                <iframe src={previewContent.blobUrl} className="w-full h-[75vh]" title="PDF Preview" />
+              ) : previewContent?.type === 'image' ? (
+                <div className="flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-950">
+                  <img src={previewContent.blobUrl} alt={previewContent.filename} className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-lg" />
+                </div>
+              ) : previewContent ? (
+                <div className="p-6">
+                  <div className="bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 p-5 overflow-auto max-h-[65vh]">
+                    <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono leading-relaxed break-words">{previewContent.content}</pre>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ENLARGED IMAGE PREVIEW MODAL */}
+      {previewImageUrl && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[300] flex items-center justify-center p-4" onClick={() => setPreviewImageUrl(null)}>
+          <div className="relative max-w-2xl w-full flex items-center justify-center">
+            <button onClick={() => setPreviewImageUrl(null)} className="absolute -top-12 right-0 text-white hover:text-slate-300 p-2"><X size={28} /></button>
+            <img src={previewImageUrl} alt="Enlarged Avatar" className="w-full max-w-sm md:max-w-md h-auto rounded-2xl shadow-2xl object-cover" onClick={(e) => e.stopPropagation()} />
+          </div>
+        </div>
+      )}
+
+      {/* ANIMATED TOAST NOTIFICATION */}
+      {toastConfig && (
+        <div className="fixed bottom-6 right-6 z-[400] animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <div className={`px-5 py-4 rounded-xl shadow-xl flex items-center gap-3 border ${toastConfig.type === 'success'
+            ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20 text-emerald-800 dark:text-emerald-400'
+            : toastConfig.type === 'error'
+              ? 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-800 dark:text-red-400'
+              : 'bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/50 text-slate-700 dark:text-slate-300'
+            }`}>
+            {toastConfig.type === 'success' ? (
+              <CheckCircle2 size={24} className="text-emerald-500 shrink-0" />
+            ) : toastConfig.type === 'error' ? (
+              <AlertCircle size={24} className="text-red-500 shrink-0" />
+            ) : (
+              <Info size={24} className="text-slate-500 dark:text-slate-400 shrink-0" />
+            )}
+            <div className="flex flex-col">
+              <span className="font-semibold text-sm">
+                {toastConfig.title}
+              </span>
+              <span className={`text-xs mt-0.5 ${toastConfig.type === 'success'
+                ? 'text-emerald-600/80 dark:text-emerald-400/80'
+                : toastConfig.type === 'error'
+                  ? 'text-red-600/80 dark:text-red-400/80'
+                  : 'text-slate-500 dark:text-slate-400'
+                }`}>
+                {toastConfig.description}
+              </span>
+            </div>
+            {toastConfig.action && (
+              <button 
+                onClick={() => { toastConfig.action!.onClick(); setToastConfig(null); }}
+                className={`ml-2 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm border transition-colors ${
+                  toastConfig.type === 'success' 
+                    ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30 hover:bg-emerald-200 dark:hover:bg-emerald-500/30' 
+                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
+                }`}
+              >
+                {toastConfig.action.label}
+              </button>
+            )}
+            <button onClick={() => setToastConfig(null)} className="ml-2 p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+              <X size={16} className={toastConfig.type === 'success' ? 'text-emerald-600 dark:text-emerald-500' : toastConfig.type === 'error' ? 'text-red-600 dark:text-red-500' : 'text-slate-400'} />
+            </button>
           </div>
         </div>
       )}

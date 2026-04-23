@@ -46,6 +46,7 @@ node_modules/
 /tasks/
 /uploads/
 /.vscode/
+TODO.md
 
 # OS generated files
 .DS_Store

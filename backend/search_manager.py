@@ -110,3 +110,27 @@ class SearchManager:
         
         result = self.search_client.upload_documents(documents=docs_to_index)
         return {"chunks": len(chunks), "status": "Uploaded"}
+
+    def delete_assistant_documents(self, assistant_id: str):
+        if not self.endpoint or not self.key: return
+        try:
+            results = self.search_client.search(search_text="*", filter=f"assistant_id eq '{assistant_id}'", select=["id"])
+            docs_to_delete = [{"id": r["id"]} for r in results]
+            if docs_to_delete:
+                # delete_documents has a limit of 1000 per batch, chunking if necessary
+                for i in range(0, len(docs_to_delete), 1000):
+                    self.search_client.delete_documents(documents=docs_to_delete[i:i+1000])
+        except Exception as e:
+            print(f"Error deleting index docs for assistant {assistant_id}: {e}")
+
+    def delete_document_by_filename(self, filename: str, assistant_id: str):
+        if not self.endpoint or not self.key: return
+        try:
+            safe_filename = filename.replace("'", "''")
+            results = self.search_client.search(search_text="*", filter=f"assistant_id eq '{assistant_id}' and filename eq '{safe_filename}'", select=["id"])
+            docs_to_delete = [{"id": r["id"]} for r in results]
+            if docs_to_delete:
+                for i in range(0, len(docs_to_delete), 1000):
+                    self.search_client.delete_documents(documents=docs_to_delete[i:i+1000])
+        except Exception as e:
+            print(f"Error deleting index docs for {filename}: {e}")
