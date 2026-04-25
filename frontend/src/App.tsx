@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, ArrowRight, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb } from 'lucide-react';
+import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, ArrowRight, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal } from 'lucide-react';
 
 interface Assistant {
   id: string;
@@ -9,6 +9,8 @@ interface Assistant {
   description: string;
   instructions: string;
   image_url?: string;
+  sort_order?: number;
+  pinned?: number;
 }
 
 interface ChatSession {
@@ -24,11 +26,24 @@ interface Document {
 }
 
 interface ChatMessage {
+  id?: number;
   role: 'user' | 'assistant';
   content: string;
   citations?: string[];
+  feedback?: number | null;
   created_at?: string;
+  streaming?: boolean;
 }
+
+const SNIPPETS: { label: string; text: string }[] = [
+  { label: 'Strict citations', text: 'Always cite the source filename in [brackets] for every factual claim. Never fabricate citations.' },
+  { label: 'No hallucination', text: 'If the context does not contain the answer, state clearly that you do not know based on the provided documents.' },
+  { label: 'Step-by-step reasoning', text: 'Walk through your reasoning step-by-step before stating the final answer.' },
+  { label: 'Concise tone', text: 'Keep answers concise. Avoid filler words and redundant restatements of the question.' },
+  { label: 'Formal register', text: 'Maintain a formal, professional tone. Avoid colloquialisms and emojis.' },
+  { label: 'Markdown formatting', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative.' },
+  { label: 'Refuse out-of-scope', text: 'If the user asks about topics unrelated to the provided documents, politely decline and steer back to the documents.' },
+];
 
 export default function App() {
   const [assistants, setAssistants] = useState<Assistant[]>([]);
@@ -91,6 +106,21 @@ export default function App() {
   const [previewContent, setPreviewContent] = useState<{type: string, filename: string, content?: string, blobUrl?: string} | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // New feature state
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renamingDraft, setRenamingDraft] = useState('');
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [chatSearchResults, setChatSearchResults] = useState<{id: number, role: string, content: string, created_at?: string}[]>([]);
+  const [showSnippets, setShowSnippets] = useState<'edit' | 'create' | null>(null);
+  const [draggingAssistantId, setDraggingAssistantId] = useState<string | null>(null);
+  const [dragOverAssistantId, setDragOverAssistantId] = useState<string | null>(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [assistantMenuOpen, setAssistantMenuOpen] = useState<string | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const chatSearchInputRef = useRef<HTMLInputElement>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const newAvatarInputRef = useRef<HTMLInputElement>(null);
@@ -148,6 +178,62 @@ export default function App() {
       fetchHistory(selectedSession.id);
     }
   }, [selectedSession]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement | null)?.isContentEditable;
+      const mod = e.ctrlKey || e.metaKey;
+
+      // Esc: close any modal / overlay
+      if (e.key === 'Escape') {
+        if (chatSearchOpen) { setChatSearchOpen(false); return; }
+        if (showExportMenu) { setShowExportMenu(false); return; }
+        if (assistantMenuOpen) { setAssistantMenuOpen(null); return; }
+        if (renamingSessionId) { setRenamingSessionId(null); return; }
+        if (previewImageUrl) { setPreviewImageUrl(null); return; }
+        if (previewDoc) { closePreview(); return; }
+        if (showCancelAvatarModal) { setShowCancelAvatarModal(false); return; }
+        if (showSaveWhileGeneratingModal) { setShowSaveWhileGeneratingModal(false); return; }
+        if (showEditModal) { setShowEditModal(false); return; }
+        if (showAddModal) { setShowAddModal(false); return; }
+        if (assistantToDelete) { setAssistantToDelete(null); return; }
+        if (sessionToDelete) { setSessionToDelete(null); return; }
+        if (documentToDelete) { setDocumentToDelete(null); return; }
+        return;
+      }
+
+      // Ctrl/Cmd + K: new chat
+      if (mod && e.key.toLowerCase() === 'k' && selectedAssistant) {
+        e.preventDefault();
+        handleCreateSession();
+        return;
+      }
+      // Ctrl/Cmd + F: search current chat
+      if (mod && e.key.toLowerCase() === 'f' && selectedSession) {
+        e.preventDefault();
+        setChatSearchOpen(true);
+        setTimeout(() => chatSearchInputRef.current?.focus(), 50);
+        return;
+      }
+      // Ctrl/Cmd + /: toggle sessions pane
+      if (mod && e.key === '/') {
+        e.preventDefault();
+        setShowChatsPane(p => !p);
+        return;
+      }
+      // Ctrl/Cmd + B: toggle pin on selected assistant
+      if (mod && e.key.toLowerCase() === 'b' && !inField && selectedAssistant) {
+        e.preventDefault();
+        handleTogglePin(selectedAssistant);
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAssistant, selectedSession, chatSearchOpen, showExportMenu, assistantMenuOpen, renamingSessionId, previewImageUrl, previewDoc, showCancelAvatarModal, showSaveWhileGeneratingModal, showEditModal, showAddModal, assistantToDelete, sessionToDelete, documentToDelete]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     if (isAutoScrollingRef.current) {
@@ -588,6 +674,81 @@ export default function App() {
     setDocumentToDelete(null);
   };
 
+  const consumeStream = async (
+    sessionId: string,
+    body: object,
+    endpoint: 'chat/stream' | 'regenerate'
+  ): Promise<void> => {
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = new AbortController();
+
+    const placeholderIdx = messages.length; // approximate; actual index resolved via setter
+    setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true, created_at: new Date().toISOString() }]);
+
+    try {
+      const response = await fetch(`/api/sessions/${sessionId}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: streamAbortRef.current.signal,
+      });
+
+      if (!response.ok || !response.body) throw new Error('API Error');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events delimited by \n\n
+        let sepIdx;
+        while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, sepIdx);
+          buffer = buffer.slice(sepIdx + 2);
+          const lines = rawEvent.split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const json = line.slice(5).trim();
+            if (!json) continue;
+            try {
+              const evt = JSON.parse(json);
+              if (evt.type === 'token') {
+                setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, content: m.content + evt.content } : m));
+              } else if (evt.type === 'user_meta') {
+                // back-fill the user message id from the server
+                setMessages(prev => {
+                  const copy = [...prev];
+                  // user message is the one before the streaming assistant placeholder
+                  const userIdx = copy.length - 2;
+                  if (userIdx >= 0 && copy[userIdx].role === 'user' && copy[userIdx].id === undefined) {
+                    copy[userIdx] = { ...copy[userIdx], id: evt.id, created_at: evt.created_at };
+                  }
+                  return copy;
+                });
+              } else if (evt.type === 'done') {
+                setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, id: evt.id, citations: evt.citations, created_at: evt.created_at, streaming: false } : m));
+                if (selectedAssistant) fetchSessions(selectedAssistant.id);
+              } else if (evt.type === 'error') {
+                setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, content: `Error: ${evt.message}`, streaming: false } : m));
+              }
+            } catch {/* ignore malformed line */}
+          }
+        }
+      }
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, content: m.content || "Sorry, I encountered an error. Please try again.", streaming: false } : m));
+      }
+    } finally {
+      void placeholderIdx;
+      streamAbortRef.current = null;
+    }
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || !selectedSession) return;
@@ -602,35 +763,229 @@ export default function App() {
     isAutoScrollingRef.current = true;
     setShowScrollButton(false);
     (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 50);
+    setTimeout(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 50);
 
+    await consumeStream(selectedSession.id, { query: userMessage }, 'chat/stream');
+
+    setIsLoading(false);
+    isAutoScrollingRef.current = true;
+    setShowScrollButton(false);
+    (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+    setTimeout(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 50);
+  };
+
+  // -------- Feedback --------
+  const handleFeedback = async (messageId: number | undefined, value: -1 | 1) => {
+    if (messageId === undefined) return;
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, feedback: m.feedback === value ? null : value } : m));
+    const newVal = messages.find(m => m.id === messageId)?.feedback === value ? null : value;
     try {
-      const response = await fetch(`/api/sessions/${selectedSession.id}/chat/`, {
+      await fetch(`/api/messages/${messageId}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMessage })
+        body: JSON.stringify({ feedback: newVal }),
       });
+    } catch (e) { console.error(e); }
+  };
 
-      if (!response.ok) throw new Error('API Error');
-      const data = await response.json();
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply, citations: data.citations, created_at: data.created_at }]);
-
-      // Refresh sessions to get updated title
+  // -------- Regenerate --------
+  const handleRegenerate = async () => {
+    if (!selectedSession || isLoading) return;
+    setIsLoading(true);
+    setMessages(prev => {
+      const copy = [...prev];
+      while (copy.length && copy[copy.length - 1].role === 'assistant') copy.pop();
+      return copy;
+    });
+    try {
+      const res = await fetch(`/api/sessions/${selectedSession.id}/regenerate`, { method: 'POST' });
+      if (!res.ok) throw new Error('Regenerate failed');
+      const data = await res.json();
+      setMessages(prev => [...prev, { id: data.id, role: 'assistant', content: data.reply, citations: data.citations, created_at: data.created_at }]);
       if (selectedAssistant) fetchSessions(selectedAssistant.id);
-    } catch (error) {
-      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I encountered an error. Please try again.", created_at: new Date().toISOString() }]);
+    } catch (e) {
+      console.error(e);
+      showToast('error', 'Regeneration Failed', 'Unable to regenerate the response.');
     } finally {
       setIsLoading(false);
-      // Auto-scroll again when AI finishes replying
-      isAutoScrollingRef.current = true;
-      setShowScrollButton(false);
-      (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 50);
     }
+  };
+
+  // -------- Rename session --------
+  const startRenameSession = (s: ChatSession) => {
+    setRenamingSessionId(s.id);
+    setRenamingDraft(s.title || 'New Conversation');
+    setTimeout(() => renameInputRef.current?.focus(), 50);
+  };
+
+  const commitRenameSession = async () => {
+    if (!renamingSessionId) return;
+    const newTitle = renamingDraft.trim();
+    const id = renamingSessionId;
+    setRenamingSessionId(null);
+    if (!newTitle) return;
+    try {
+      const res = await fetch(`/api/sessions/${id}/title`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setSessions(prev => prev.map(s => s.id === id ? { ...s, title: updated.title } : s));
+        if (selectedSession?.id === id) setSelectedSession({ ...selectedSession, title: updated.title });
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  // -------- Conversation search --------
+  const runChatSearch = async (q: string) => {
+    if (!selectedSession) return;
+    if (!q.trim()) { setChatSearchResults([]); return; }
+    try {
+      const res = await fetch(`/api/sessions/${selectedSession.id}/search?q=${encodeURIComponent(q)}`);
+      if (res.ok) setChatSearchResults(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  // -------- Clone assistant --------
+  const handleCloneAssistant = async (assistant: Assistant) => {
+    setAssistantMenuOpen(null);
+    try {
+      const res = await fetch(`/api/assistants/${assistant.id}/clone`, { method: 'POST' });
+      if (!res.ok) throw new Error();
+      await fetchAssistants();
+      showToast('success', 'Assistant Cloned', `Created a copy of ${assistant.name}.`);
+    } catch (e) {
+      console.error(e);
+      showToast('error', 'Clone Failed', 'Unable to clone the assistant.');
+    }
+  };
+
+  // -------- Branch session --------
+  const handleBranchFromMessage = async (messageId: number | undefined) => {
+    if (messageId === undefined || !selectedSession || !selectedAssistant) return;
+    try {
+      const res = await fetch(`/api/sessions/${selectedSession.id}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_message_id: messageId }),
+      });
+      if (!res.ok) throw new Error();
+      const newSession = await res.json();
+      await fetchSessions(selectedAssistant.id);
+      setSelectedSession(newSession);
+      showToast('success', 'Conversation Branched', 'Forked into a new chat.');
+    } catch (e) {
+      console.error(e);
+      showToast('error', 'Branch Failed', 'Unable to branch the conversation.');
+    }
+  };
+
+  // -------- Toggle pin / reorder assistants --------
+  const persistAssistantOrder = async (items: Assistant[]) => {
+    const payload = items.map((a, i) => ({ id: a.id, sort_order: i, pinned: a.pinned ?? 0 }));
+    try {
+      await fetch('/api/assistants/order', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: payload }),
+      });
+    } catch (e) { console.error(e); }
+  };
+
+  const handleTogglePin = async (a: Assistant) => {
+    setAssistantMenuOpen(null);
+    const newPinned = a.pinned ? 0 : 1;
+    setAssistants(prev => {
+      const updated = prev.map(x => x.id === a.id ? { ...x, pinned: newPinned } : x);
+      // re-sort: pinned first, then sort_order
+      updated.sort((x, y) => (y.pinned ?? 0) - (x.pinned ?? 0) || (x.sort_order ?? 0) - (y.sort_order ?? 0));
+      void persistAssistantOrder(updated);
+      return updated;
+    });
+  };
+
+  const handleAssistantDrop = (targetId: string) => {
+    if (!draggingAssistantId || draggingAssistantId === targetId) {
+      setDraggingAssistantId(null); setDragOverAssistantId(null); return;
+    }
+    setAssistants(prev => {
+      const fromIdx = prev.findIndex(a => a.id === draggingAssistantId);
+      const toIdx = prev.findIndex(a => a.id === targetId);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      const copy = [...prev];
+      const [moved] = copy.splice(fromIdx, 1);
+      copy.splice(toIdx, 0, moved);
+      // Pinned stay on top: re-sort by pinned desc; preserve new in-group order via sequential indices
+      const pinned = copy.filter(a => a.pinned);
+      const unpinned = copy.filter(a => !a.pinned);
+      const merged = [...pinned, ...unpinned];
+      void persistAssistantOrder(merged);
+      return merged;
+    });
+    setDraggingAssistantId(null);
+    setDragOverAssistantId(null);
+  };
+
+  // -------- Export chat --------
+  const buildChatMarkdown = (): string => {
+    if (!selectedAssistant || !selectedSession) return '';
+    const header = `# ${selectedSession.title || 'Conversation'}\n\nAssistant: **${selectedAssistant.name}**\n\nExported: ${new Date().toLocaleString()}\n\n---\n\n`;
+    const body = messages.map(m => {
+      const ts = m.created_at ? `*${new Date(m.created_at).toLocaleString()}*\n\n` : '';
+      const who = m.role === 'user' ? 'You' : selectedAssistant.name;
+      const cite = m.citations && m.citations.length ? `\n\n_Sources: ${m.citations.join(', ')}_` : '';
+      return `### ${who}\n${ts}${m.content}${cite}`;
+    }).join('\n\n');
+    return header + body + '\n';
+  };
+
+  const handleExportMarkdown = () => {
+    setShowExportMenu(false);
+    const md = buildChatMarkdown();
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(selectedSession?.title || 'conversation').replace(/[^\w\-]+/g, '_')}.md`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportPdf = () => {
+    setShowExportMenu(false);
+    if (!selectedAssistant || !selectedSession) return;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${selectedSession.title || 'Conversation'}</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:780px;margin:24px auto;color:#0f172a;padding:0 20px;}
+h1{margin-bottom:4px}
+.meta{color:#64748b;font-size:12px;margin-bottom:24px}
+.msg{padding:12px 14px;border-radius:8px;margin:10px 0}
+.user{background:#eef2ff;border:1px solid #c7d2fe}
+.asst{background:#f8fafc;border:1px solid #e2e8f0}
+.role{font-weight:600;font-size:12px;text-transform:uppercase;color:#475569;margin-bottom:6px}
+.cite{font-size:11px;color:#64748b;margin-top:8px}
+pre{white-space:pre-wrap;word-break:break-word;font-family:inherit;margin:0}
+</style></head><body>
+<h1>${selectedSession.title || 'Conversation'}</h1>
+<div class="meta">Assistant: ${selectedAssistant.name} · Exported ${new Date().toLocaleString()}</div>
+${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === 'user' ? 'You' : selectedAssistant.name}</div><pre>${(m.content || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' } as any)[c])}</pre>${m.citations && m.citations.length ? `<div class="cite">Sources: ${m.citations.join(', ')}</div>` : ''}</div>`).join('')}
+<script>window.onload=()=>{window.print();}</script>
+</body></html>`;
+    const win = window.open('', '_blank');
+    if (!win) { showToast('error', 'Export Failed', 'Pop-ups are blocked.'); return; }
+    win.document.open(); win.document.write(html); win.document.close();
+  };
+
+  // -------- Citation drill-down --------
+  const handleCitationClick = (filename: string) => {
+    const doc = documents.find(d => d.filename === filename);
+    if (!doc) {
+      showToast('info', 'Document Unavailable', `${filename} is no longer in the knowledge base.`);
+      return;
+    }
+    handlePreviewDocument({ id: doc.id, filename: doc.filename });
   };
 
   // ---- Helpers ----
@@ -708,26 +1063,43 @@ export default function App() {
               assistants.map(a => (
                 <div
                   key={a.id}
+                  draggable
+                  onDragStart={() => setDraggingAssistantId(a.id)}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverAssistantId(a.id); }}
+                  onDragLeave={() => { if (dragOverAssistantId === a.id) setDragOverAssistantId(null); }}
+                  onDrop={(e) => { e.preventDefault(); handleAssistantDrop(a.id); }}
+                  onDragEnd={() => { setDraggingAssistantId(null); setDragOverAssistantId(null); }}
                   onClick={() => setSelectedAssistant(a)}
-                  className={`w-full text-left px-3 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'}`}
+                  className={`w-full text-left px-2 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'} ${dragOverAssistantId === a.id && draggingAssistantId !== a.id ? 'ring-2 ring-indigo-400 dark:ring-indigo-500' : ''} ${draggingAssistantId === a.id ? 'opacity-50' : ''}`}
                 >
-                  <div className="flex items-center gap-3 overflow-hidden">
+                  <div className="flex items-center gap-2 overflow-hidden flex-1">
+                    <span className="text-slate-400 dark:text-slate-600 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity" title="Drag to reorder">
+                      <GripVertical size={14} />
+                    </span>
                     {a.image_url ? (
                       <img src={a.image_url} alt={a.name} className="w-7 h-7 rounded-lg object-cover shrink-0" />
                     ) : (
                       <Bot size={18} className={selectedAssistant?.id === a.id ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 group-hover:text-indigo-500"} />
                     )}
-                    <div className="truncate">
-                      <div className="text-sm font-medium truncate">{a.name}</div>
+                    <div className="truncate flex items-center gap-1.5 min-w-0">
+                      <span className="text-sm font-medium truncate">{a.name}</span>
+                      {!!a.pinned && <Pin size={11} className="text-amber-500 shrink-0 fill-amber-500" />}
                     </div>
                   </div>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                    <button onClick={(e) => handleEditAssistantClick(a, e)} className="p-1 text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-300 dark:hover:bg-slate-700 rounded transition-all">
-                      <Edit2 size={14} />
-                    </button>
-                    <button onClick={(e) => handleDeleteAssistant(a, e)} className="p-1 text-slate-600 dark:text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all">
-                      <Trash2 size={14} />
-                    </button>
+                  <div className="flex gap-1 items-center shrink-0">
+                    <div className="relative">
+                      <button onClick={(e) => { e.stopPropagation(); setAssistantMenuOpen(assistantMenuOpen === a.id ? null : a.id); }} className="p-1 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-700 rounded transition-all opacity-0 group-hover:opacity-100">
+                        <MoreHorizontal size={14} />
+                      </button>
+                      {assistantMenuOpen === a.id && (
+                        <div className="absolute right-0 top-full mt-1 z-50 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 text-sm">
+                          <button onClick={(e) => { e.stopPropagation(); handleEditAssistantClick(a, e); setAssistantMenuOpen(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Edit2 size={14}/> Edit</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleTogglePin(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Pin size={14}/> {a.pinned ? 'Unpin' : 'Pin'}</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleCloneAssistant(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Copy size={14}/> Clone</button>
+                          <button onClick={(e) => { e.stopPropagation(); setAssistantMenuOpen(null); handleDeleteAssistant(a, e); }} className="w-full text-left px-3 py-2 hover:bg-red-50 dark:hover:bg-red-500/10 text-red-600 dark:text-red-400 flex items-center gap-2"><Trash2 size={14}/> Delete</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
@@ -763,19 +1135,47 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg shrink-0">
-                <button
-                  onClick={() => setActiveTab('chat')}
-                  className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'chat' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
-                >
-                  <MessageSquare size={16} /> Chat
-                </button>
-                <button
-                  onClick={() => setActiveTab('docs')}
-                  className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'docs' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
-                >
-                  <BookOpen size={16} /> <span className="hidden sm:inline">Knowledge Base</span><span className="sm:hidden">Docs</span>
-                </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {activeTab === 'chat' && selectedSession && (
+                  <>
+                    <button
+                      onClick={() => { setChatSearchOpen(true); setTimeout(() => chatSearchInputRef.current?.focus(), 50); }}
+                      title="Search this chat (Ctrl+F)"
+                      className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+                    >
+                      <Search size={16} />
+                    </button>
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowExportMenu(o => !o)}
+                        title="Export conversation"
+                        className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+                      >
+                        <Download size={16} />
+                      </button>
+                      {showExportMenu && (
+                        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm">
+                          <button onClick={handleExportMarkdown} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><FileText size={14}/> Export as .md</button>
+                          <button onClick={handleExportPdf} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><FileText size={14}/> Export as .pdf</button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+                <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
+                  <button
+                    onClick={() => setActiveTab('chat')}
+                    className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'chat' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                  >
+                    <MessageSquare size={16} /> Chat
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('docs')}
+                    className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'docs' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                  >
+                    <BookOpen size={16} /> <span className="hidden sm:inline">Knowledge Base</span><span className="sm:hidden">Docs</span>
+                  </button>
+                </div>
               </div>
             </header>
 
@@ -796,18 +1196,42 @@ export default function App() {
                     {sessions.map(s => (
                       <div
                         key={s.id}
-                        onClick={() => setSelectedSession(s)}
+                        onClick={() => { if (renamingSessionId !== s.id) setSelectedSession(s); }}
+                        onDoubleClick={(e) => { e.stopPropagation(); startRenameSession(s); }}
                         className={`w-full group px-3 py-2.5 rounded-md cursor-pointer transition-colors ${selectedSession?.id === s.id ? 'bg-indigo-50 dark:bg-indigo-900/30 font-medium' : 'hover:bg-slate-200 dark:hover:bg-slate-800'}`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className={`truncate pr-2 text-sm ${selectedSession?.id === s.id ? 'text-indigo-700 dark:text-indigo-300 font-semibold' : 'text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white'}`}>{s.title || "New Conversation"}</span>
-                          <button
-                            onClick={(e) => handleDeleteSession(s, e)}
-                            className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all ${selectedSession?.id === s.id ? 'text-indigo-500 dark:text-indigo-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10' : ''}`}
-                            title="Delete Session"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {renamingSessionId === s.id ? (
+                            <input
+                              ref={renameInputRef}
+                              value={renamingDraft}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => setRenamingDraft(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitRenameSession(); } if (e.key === 'Escape') { setRenamingSessionId(null); } }}
+                              onBlur={commitRenameSession}
+                              className="flex-1 text-sm bg-white dark:bg-slate-900 border border-indigo-400 dark:border-indigo-500 rounded px-2 py-0.5 outline-none text-slate-900 dark:text-white"
+                            />
+                          ) : (
+                            <span className={`truncate pr-2 text-sm ${selectedSession?.id === s.id ? 'text-indigo-700 dark:text-indigo-300 font-semibold' : 'text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white'}`}>{s.title || "New Conversation"}</span>
+                          )}
+                          {renamingSessionId !== s.id && (
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); startRenameSession(s); }}
+                                className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:text-indigo-400 dark:hover:bg-indigo-500/10 rounded transition-all`}
+                                title="Rename"
+                              >
+                                <Edit2 size={13} />
+                              </button>
+                              <button
+                                onClick={(e) => handleDeleteSession(s, e)}
+                                className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all ${selectedSession?.id === s.id ? 'text-indigo-500 dark:text-indigo-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10' : ''}`}
+                                title="Delete Session"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
                         </div>
                         <div className={`text-[10px] mt-0.5 ${selectedSession?.id === s.id ? 'text-indigo-400/70' : 'text-slate-500'}`}>
                           {s.updated_at ? new Date(s.updated_at + 'Z').toLocaleDateString('en-US', { timeZone: 'Europe/Paris', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}
@@ -899,10 +1323,15 @@ export default function App() {
                                         <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Grounded Sources</span>
                                         <div className="flex flex-wrap gap-1.5">
                                           {msg.citations.map((cite, i) => (
-                                            <span key={i} className="inline-flex items-center px-2 py-1 rounded bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-medium">
+                                            <button
+                                              key={i}
+                                              onClick={() => handleCitationClick(cite)}
+                                              title={`Open ${cite}`}
+                                              className="inline-flex items-center px-2 py-1 rounded bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-medium hover:border-indigo-400 dark:hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors"
+                                            >
                                               <FileText size={10} className="mr-1 text-indigo-400" />
                                               {cite}
-                                            </span>
+                                            </button>
                                           ))}
                                         </div>
                                       </div>
@@ -915,6 +1344,41 @@ export default function App() {
                                     )}
                                   </div>
                                 </div>
+                                {msg.role === 'assistant' && !msg.streaming && msg.id !== undefined && (
+                                  <div className="flex items-center gap-1 -mt-3 ml-1 text-slate-400 dark:text-slate-500">
+                                    <button
+                                      onClick={() => handleFeedback(msg.id, 1)}
+                                      title="Helpful"
+                                      className={`p-1.5 rounded-md transition-colors ${msg.feedback === 1 ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10' : 'hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'}`}
+                                    >
+                                      <ThumbsUp size={13} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleFeedback(msg.id, -1)}
+                                      title="Not helpful"
+                                      className={`p-1.5 rounded-md transition-colors ${msg.feedback === -1 ? 'text-red-500 bg-red-50 dark:bg-red-500/10' : 'hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10'}`}
+                                    >
+                                      <ThumbsDown size={13} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleBranchFromMessage(msg.id)}
+                                      title="Branch conversation here"
+                                      className="p-1.5 rounded-md hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors"
+                                    >
+                                      <GitBranch size={13} />
+                                    </button>
+                                    {index === messages.length - 1 && (
+                                      <button
+                                        onClick={handleRegenerate}
+                                        disabled={isLoading}
+                                        title="Regenerate"
+                                        className="p-1.5 rounded-md hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                      >
+                                        <RotateCcw size={13} />
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </React.Fragment>
                             )
                           })}
@@ -1187,7 +1651,22 @@ export default function App() {
                 <input type="text" value={editAsstConfig.description} onChange={e => setEditAsstConfig({ ...editAsstConfig, description: e.target.value })} placeholder="Briefly describe its purpose" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">System Instructions <span className="text-red-500">*</span></label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">System Instructions <span className="text-red-500">*</span></label>
+                  <div className="relative">
+                    <button type="button" onClick={() => setShowSnippets(showSnippets === 'edit' ? null : 'edit')} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><Plus size={12}/> Insert snippet</button>
+                    {showSnippets === 'edit' && (
+                      <div className="absolute right-0 top-full mt-1 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm">
+                        {SNIPPETS.map((sn, i) => (
+                          <button key={i} type="button" onClick={() => { setEditAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300">
+                            <div className="font-medium text-xs text-slate-900 dark:text-white">{sn.label}</div>
+                            <div className="text-[11px] text-slate-500 truncate">{sn.text}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <p className="text-[11px] text-slate-500 mb-2">Define how the AI should behave, its tone, and strict rules.</p>
                 <textarea required value={editAsstConfig.instructions} onChange={e => setEditAsstConfig({ ...editAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed" />
               </div>
@@ -1290,7 +1769,22 @@ export default function App() {
                     ))}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Custom Instructions <span className="text-red-500">*</span></label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Custom Instructions <span className="text-red-500">*</span></label>
+                      <div className="relative">
+                        <button type="button" onClick={() => setShowSnippets(showSnippets === 'create' ? null : 'create')} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><Plus size={12}/> Insert snippet</button>
+                        {showSnippets === 'create' && (
+                          <div className="absolute right-0 top-full mt-1 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm">
+                            {SNIPPETS.map((sn, i) => (
+                              <button key={i} type="button" onClick={() => { setNewAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                <div className="font-medium text-xs text-slate-900 dark:text-white">{sn.label}</div>
+                                <div className="text-[11px] text-slate-500 truncate">{sn.text}</div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                     <textarea value={newAsstConfig.instructions} onChange={e => setNewAsstConfig({ ...newAsstConfig, instructions: e.target.value })} rows={6} className="w-full px-4 py-3 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
                   </div>
                 </div>
@@ -1593,6 +2087,41 @@ export default function App() {
           <div className="relative max-w-2xl w-full flex items-center justify-center">
             <button onClick={() => setPreviewImageUrl(null)} className="absolute -top-12 right-0 text-white hover:text-slate-300 p-2"><X size={28} /></button>
             <img src={previewImageUrl} alt="Enlarged Avatar" className="w-full max-w-sm md:max-w-md h-auto rounded-2xl shadow-2xl object-cover" onClick={(e) => e.stopPropagation()} />
+          </div>
+        </div>
+      )}
+
+      {/* CHAT SEARCH OVERLAY */}
+      {chatSearchOpen && selectedSession && (
+        <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-sm z-[260] flex items-start justify-center p-4 pt-24" onClick={() => setChatSearchOpen(false)}>
+          <div className="bg-white dark:bg-slate-900 w-full max-w-xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+              <Search size={16} className="text-slate-400 mr-2" />
+              <input
+                ref={chatSearchInputRef}
+                value={chatSearchQuery}
+                onChange={(e) => { setChatSearchQuery(e.target.value); runChatSearch(e.target.value); }}
+                placeholder="Search this conversation..."
+                className="flex-1 bg-transparent outline-none text-sm text-slate-900 dark:text-white placeholder-slate-400"
+              />
+              <button onClick={() => setChatSearchOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded"><X size={16}/></button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto">
+              {chatSearchQuery.trim() === '' ? (
+                <div className="p-6 text-center text-sm text-slate-500">Type to search messages in this chat.</div>
+              ) : chatSearchResults.length === 0 ? (
+                <div className="p-6 text-center text-sm text-slate-500">No matches.</div>
+              ) : (
+                <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {chatSearchResults.map(r => (
+                    <li key={r.id} className="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                      <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 mb-1">{r.role === 'user' ? 'You' : selectedAssistant?.name || 'Assistant'} · {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
+                      <div className="text-sm text-slate-700 dark:text-slate-300 line-clamp-3 whitespace-pre-wrap">{r.content}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -46,6 +46,7 @@ node_modules/
 /tasks/
 /uploads/
 /.vscode/
+.claude/
 TODO.md
 
 # OS generated files

@@ -73,8 +73,10 @@ class Assistant(Base):
     description = Column(String(500), nullable=True)
     instructions = Column(Text, nullable=False)
     image_url = Column(String(500), nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    pinned = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     sessions = relationship("ChatSession", back_populates="assistant", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="assistant", cascade="all, delete-orphan")
 
@@ -105,6 +107,7 @@ class ChatMessage(Base):
     role = Column(String(20), nullable=False) # 'user' or 'assistant'
     content = Column(Text, nullable=False)
     citations = Column(Text, nullable=True) # Stored as JSON string
+    feedback = Column(Integer, nullable=True)  # -1 / 0 / 1
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ChatSession", back_populates="messages")

@@ -3,10 +3,10 @@ import shutil
 import json
 import uuid
 import httpx
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import Response, FileResponse, JSONResponse
+from fastapi.responses import Response, FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect as sa_inspect
 from dotenv import load_dotenv
@@ -22,20 +22,51 @@ from backend.database import engine, Base, get_db, Assistant, Document, ChatSess
 
 Base.metadata.create_all(bind=engine)
 
-# Migrate existing databases: add image_url column if missing (SQLite only)
+# Migrate existing databases: add new columns if missing
 def migrate_db():
-    if not os.getenv("AZURE_SQL_CONNECTION_STRING"):
+    from sqlalchemy import text
+    is_azure = bool(os.getenv("AZURE_SQL_CONNECTION_STRING"))
+
+    if is_azure:
+        # T-SQL: check sys.columns and conditionally ALTER TABLE
+        migrations = [
+            # (table, column, T-SQL type)
+            ("assistants", "image_url",   "NVARCHAR(500)"),
+            ("assistants", "sort_order",  "INT NOT NULL DEFAULT 0"),
+            ("assistants", "pinned",      "INT NOT NULL DEFAULT 0"),
+            ("messages",   "feedback",    "INT NULL"),
+        ]
+        with engine.begin() as conn:
+            for table, col, col_type in migrations:
+                result = conn.execute(text(
+                    f"SELECT COUNT(*) FROM sys.columns "
+                    f"WHERE object_id = OBJECT_ID('{table}') AND name = '{col}'"
+                ))
+                if result.scalar() == 0:
+                    conn.execute(text(f"ALTER TABLE {table} ADD {col} {col_type}"))
+                    print(f"[Migrate] Added column {table}.{col}")
+    else:
+        # SQLite
         inspector = sa_inspect(engine)
-        columns = [col['name'] for col in inspector.get_columns('assistants')]
-        if 'image_url' not in columns:
-            from sqlalchemy import text
-            with engine.begin() as conn:
+        asst_cols = [col['name'] for col in inspector.get_columns('assistants')]
+        with engine.begin() as conn:
+            if 'image_url' not in asst_cols:
                 conn.execute(text("ALTER TABLE assistants ADD COLUMN image_url VARCHAR"))
+            if 'sort_order' not in asst_cols:
+                conn.execute(text("ALTER TABLE assistants ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"))
+            if 'pinned' not in asst_cols:
+                conn.execute(text("ALTER TABLE assistants ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"))
+
+        msg_cols = [col['name'] for col in inspector.get_columns('messages')]
+        with engine.begin() as conn:
+            if 'feedback' not in msg_cols:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN feedback INTEGER"))
 
 try:
     migrate_db()
-except Exception:
-    pass  # Table may not exist yet on first run
+except Exception as e:
+    print(f"[Migrate] Warning: {e}")  # Table may not exist yet on first run
+
 
 app = FastAPI(title="Multi-Assistant RAG API")
 
@@ -82,7 +113,9 @@ async def create_assistant(
     image: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    assistant = Assistant(name=name, instructions=instructions, description=description)
+    from sqlalchemy import func
+    next_order = (db.query(func.coalesce(func.max(Assistant.sort_order), 0)).scalar() or 0) + 1
+    assistant = Assistant(name=name, instructions=instructions, description=description, sort_order=next_order)
     db.add(assistant)
     db.commit()
     db.refresh(assistant)
@@ -100,7 +133,7 @@ async def create_assistant(
 
 @app.get("/assistants/")
 def list_assistants(db: Session = Depends(get_db)):
-    return db.query(Assistant).all()
+    return db.query(Assistant).order_by(Assistant.pinned.desc(), Assistant.sort_order.asc(), Assistant.created_at.asc()).all()
 
 @app.put("/assistants/{assistant_id}")
 async def update_assistant(
@@ -385,13 +418,15 @@ async def send_chat_message(session_id: str, request: dict, db: Session = Depend
 
 @app.get("/sessions/{session_id}/history/")
 def get_session_history(session_id: str, db: Session = Depends(get_db)):
-    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
+    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
     res = []
     for m in messages:
         res.append({
-            "role": m.role, 
-            "content": m.content, 
+            "id": m.id,
+            "role": m.role,
+            "content": m.content,
             "citations": json.loads(m.citations) if m.citations else [],
+            "feedback": m.feedback,
             "created_at": (m.created_at.isoformat() + "Z") if m.created_at else None
         })
     return res
@@ -405,3 +440,260 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
     db.delete(session)
     db.commit()
     return {"status": "deleted"}
+
+# ---------------------------------------------------------------------------
+# Streaming chat (SSE)
+# ---------------------------------------------------------------------------
+@app.post("/sessions/{session_id}/chat/stream")
+def send_chat_message_stream(session_id: str, request: dict, db: Session = Depends(get_db)):
+    query = request.get("query")
+    chat_session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    assistant = chat_session.assistant
+    history_records = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
+    history = [{"role": m.role, "content": m.content} for m in history_records[-10:]]
+
+    is_first_message = len(history_records) == 0
+
+    user_msg = ChatMessage(session_id=session_id, role="user", content=query)
+    db.add(user_msg)
+    db.commit()
+    db.refresh(user_msg)
+    user_msg_id = user_msg.id
+    user_created_at = (user_msg.created_at.isoformat() + "Z") if user_msg.created_at else None
+
+    def event_gen():
+        from datetime import datetime as _dt
+        # Send initial user-message metadata so frontend can persist its id
+        yield f"data: {json.dumps({'type': 'user_meta', 'id': user_msg_id, 'created_at': user_created_at})}\n\n"
+
+        full_text_parts = []
+        used_citations = []
+        try:
+            for kind, payload in chat_manager.stream_response(query, history, assistant.instructions, assistant.id):
+                if kind == "token":
+                    full_text_parts.append(payload)
+                    yield f"data: {json.dumps({'type': 'token', 'content': payload})}\n\n"
+                elif kind == "done":
+                    used_citations = payload
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        full_text = "".join(full_text_parts)
+
+        # Persist assistant message
+        ai_msg = ChatMessage(session_id=session_id, role="assistant", content=full_text, citations=json.dumps(used_citations))
+        db.add(ai_msg)
+        chat_session.updated_at = _dt.utcnow()
+        if is_first_message:
+            chat_session.title = (query[:30] + "...") if len(query) > 30 else query
+        db.commit()
+        db.refresh(ai_msg)
+
+        ai_created_at = (ai_msg.created_at.isoformat() + "Z") if ai_msg.created_at else None
+        yield f"data: {json.dumps({'type': 'done', 'id': ai_msg.id, 'citations': used_citations, 'created_at': ai_created_at, 'session_title': chat_session.title})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+# ---------------------------------------------------------------------------
+# Message feedback
+# ---------------------------------------------------------------------------
+@app.post("/messages/{message_id}/feedback")
+def set_message_feedback(message_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    value = payload.get("feedback")
+    if value not in (-1, 0, 1, None):
+        raise HTTPException(status_code=400, detail="feedback must be -1, 0, 1, or null")
+    msg = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    msg.feedback = value
+    db.commit()
+    return {"id": msg.id, "feedback": msg.feedback}
+
+# ---------------------------------------------------------------------------
+# Rename session
+# ---------------------------------------------------------------------------
+@app.put("/sessions/{session_id}/title")
+def rename_session(session_id: str, payload: dict = Body(...), db: Session = Depends(get_db)):
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if len(title) > 255:
+        title = title[:255]
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session.title = title
+    db.commit()
+    db.refresh(session)
+    return session
+
+# ---------------------------------------------------------------------------
+# Regenerate last assistant response
+# ---------------------------------------------------------------------------
+@app.post("/sessions/{session_id}/regenerate")
+def regenerate_last(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    msgs = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
+    if not msgs:
+        raise HTTPException(status_code=400, detail="No messages to regenerate")
+
+    # Find last assistant message and matching preceding user message
+    last_user_idx = None
+    for i in range(len(msgs) - 1, -1, -1):
+        if msgs[i].role == "user":
+            last_user_idx = i
+            break
+    if last_user_idx is None:
+        raise HTTPException(status_code=400, detail="No user message to regenerate from")
+
+    # Drop everything after last user message (incl. any assistant replies)
+    for m in msgs[last_user_idx + 1:]:
+        db.delete(m)
+    db.commit()
+
+    history_records = msgs[:last_user_idx]  # everything before user msg
+    history = [{"role": m.role, "content": m.content} for m in history_records[-10:]]
+    query = msgs[last_user_idx].content
+
+    response_text, citations = chat_manager.generate_response(query, history, session.assistant.instructions, session.assistant.id)
+    ai_msg = ChatMessage(session_id=session_id, role="assistant", content=response_text, citations=json.dumps(citations))
+    db.add(ai_msg)
+    from datetime import datetime as _dt
+    session.updated_at = _dt.utcnow()
+    db.commit()
+    db.refresh(ai_msg)
+    return {
+        "id": ai_msg.id,
+        "reply": response_text,
+        "citations": citations,
+        "created_at": (ai_msg.created_at.isoformat() + "Z") if ai_msg.created_at else None,
+    }
+
+# ---------------------------------------------------------------------------
+# Search messages within a session
+# ---------------------------------------------------------------------------
+@app.get("/sessions/{session_id}/search")
+def search_session_messages(session_id: str, q: str = "", db: Session = Depends(get_db)):
+    q = q.strip()
+    if not q:
+        return []
+    pattern = f"%{q}%"
+    msgs = (db.query(ChatMessage)
+              .filter(ChatMessage.session_id == session_id)
+              .filter(ChatMessage.content.ilike(pattern))
+              .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+              .all())
+    return [{
+        "id": m.id,
+        "role": m.role,
+        "content": m.content,
+        "created_at": (m.created_at.isoformat() + "Z") if m.created_at else None,
+    } for m in msgs]
+
+# ---------------------------------------------------------------------------
+# Clone assistant (config + image only — documents NOT copied)
+# ---------------------------------------------------------------------------
+@app.post("/assistants/{assistant_id}/clone")
+def clone_assistant(assistant_id: str, db: Session = Depends(get_db)):
+    src = db.query(Assistant).filter(Assistant.id == assistant_id).first()
+    if not src:
+        raise HTTPException(status_code=404, detail="Assistant not found")
+
+    from sqlalchemy import func as _func
+    next_order = (db.query(_func.coalesce(_func.max(Assistant.sort_order), 0)).scalar() or 0) + 1
+
+    cloned = Assistant(
+        name=f"{src.name} (Copy)",
+        description=src.description,
+        instructions=src.instructions,
+        sort_order=next_order,
+        pinned=0,
+    )
+    db.add(cloned)
+    db.commit()
+    db.refresh(cloned)
+
+    # Copy avatar bytes (new filename) so deletion of the source is safe.
+    if src.image_url:
+        try:
+            src_filename = os.path.basename(src.image_url)
+            if storage.avatar_exists(src_filename):
+                data = storage.get_avatar_bytes(src_filename)
+                ext = os.path.splitext(src_filename)[1] or ".png"
+                import time as _time
+                new_filename = f"{cloned.id}_{int(_time.time())}{ext}"
+                cloned.image_url = storage.upload_avatar(new_filename, data)
+                db.commit()
+                db.refresh(cloned)
+        except Exception as e:
+            print(f"[Clone] Failed to copy avatar: {e}")
+
+    return cloned
+
+# ---------------------------------------------------------------------------
+# Branch a conversation from a given message
+# ---------------------------------------------------------------------------
+@app.post("/sessions/{session_id}/branch")
+def branch_session(session_id: str, payload: dict = Body(...), db: Session = Depends(get_db)):
+    from_message_id = payload.get("from_message_id")
+    if from_message_id is None:
+        raise HTTPException(status_code=400, detail="from_message_id is required")
+
+    src = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not src:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    pivot = db.query(ChatMessage).filter(ChatMessage.id == int(from_message_id), ChatMessage.session_id == session_id).first()
+    if not pivot:
+        raise HTTPException(status_code=404, detail="Pivot message not found in session")
+
+    msgs = (db.query(ChatMessage)
+              .filter(ChatMessage.session_id == session_id)
+              .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+              .all())
+    cutoff_idx = next((i for i, m in enumerate(msgs) if m.id == pivot.id), -1)
+    if cutoff_idx == -1:
+        raise HTTPException(status_code=404, detail="Pivot message not found")
+
+    # Inclusive: copy messages [0..cutoff_idx]
+    new_session = ChatSession(assistant_id=src.assistant_id, title=f"{src.title} (branch)")
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+
+    for m in msgs[:cutoff_idx + 1]:
+        db.add(ChatMessage(
+            session_id=new_session.id,
+            role=m.role,
+            content=m.content,
+            citations=m.citations,
+        ))
+    db.commit()
+    db.refresh(new_session)
+    return new_session
+
+# ---------------------------------------------------------------------------
+# Bulk reorder + pin assistants
+# ---------------------------------------------------------------------------
+@app.put("/assistants/order")
+def reorder_assistants(payload: dict = Body(...), db: Session = Depends(get_db)):
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="items must be a list")
+    for it in items:
+        aid = it.get("id")
+        if not aid:
+            continue
+        a = db.query(Assistant).filter(Assistant.id == aid).first()
+        if not a:
+            continue
+        if "sort_order" in it:
+            a.sort_order = int(it["sort_order"])
+        if "pinned" in it:
+            a.pinned = 1 if it["pinned"] else 0
+    db.commit()
+    return {"status": "ok"}
