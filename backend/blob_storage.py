@@ -127,7 +127,7 @@ class BlobStorageManager:
                 data, overwrite=True,
                 content_settings=ContentSettings(content_type=content_type)
             )
-            return blob_client.url
+            return f"/api/avatars/{filename}"
         else:
             avatar_path = os.path.join("uploads", "avatars", filename)
             with open(avatar_path, "wb") as f:
@@ -139,7 +139,7 @@ class BlobStorageManager:
         if self.mode == "azure":
             blob_client = self.blob_service.get_blob_client(self.avatars_container, filename)
             blob_client.upload_blob(upload_file.file, overwrite=True)
-            return blob_client.url
+            return f"/api/avatars/{filename}"
         else:
             avatar_path = os.path.join("uploads", "avatars", filename)
             with open(avatar_path, "wb") as f:
@@ -183,8 +183,4 @@ class BlobStorageManager:
 
     def get_avatar_url(self, filename: str) -> str:
         """Get the public URL for an avatar. Used when constructing image_url."""
-        if self.mode == "azure":
-            blob_client = self.blob_service.get_blob_client(self.avatars_container, filename)
-            return blob_client.url
-        else:
-            return f"/api/avatars/{filename}"
+        return f"/api/avatars/{filename}"

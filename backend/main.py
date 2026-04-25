@@ -223,6 +223,17 @@ def generate_avatar(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
+@app.get("/avatars/{filename}")
+def serve_avatar(filename: str):
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not storage.avatar_exists(filename):
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    data = storage.get_avatar_bytes(filename)
+    ext = os.path.splitext(filename)[1].lower()
+    content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+    return Response(content=data, media_type=content_type)
+
 @app.delete("/avatars/{filename}")
 def delete_avatar_endpoint(filename: str):
     if ".." in filename or "/" in filename or "\\" in filename:

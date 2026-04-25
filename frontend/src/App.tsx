@@ -1130,7 +1130,13 @@ export default function App() {
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Edit Assistant</h2>
-              <button onClick={() => setShowEditModal(false)} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:bg-slate-800"><X size={20} /></button>
+              <button onClick={() => {
+                if (generatingAssistantId === editAsstConfig?.id) {
+                  setShowCancelAvatarModal(true);
+                } else {
+                  setShowEditModal(false);
+                }
+              }} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:bg-slate-800"><X size={20} /></button>
             </div>
             <form onSubmit={handleUpdateAssistant} className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
               {/* Avatar Section */}
