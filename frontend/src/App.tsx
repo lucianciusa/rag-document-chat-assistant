@@ -55,13 +55,13 @@ interface RecentSession {
   message_count?: number;
 }
 
-const SNIPPETS: { key: string; text: string }[] = [
-  { key: 'snippet.noHallucination', text: 'If the context does not contain the answer, state clearly that you do not know based on the provided documents.' },
-  { key: 'snippet.stepByStep', text: 'Walk through your reasoning step-by-step before stating the final answer.' },
-  { key: 'snippet.concise', text: 'Keep answers concise. Avoid filler words and redundant restatements of the question.' },
-  { key: 'snippet.formal', text: 'Maintain a formal, professional tone. Avoid colloquialisms and emojis.' },
-  { key: 'snippet.markdown', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative.' },
-  { key: 'snippet.refuseOutOfScope', text: 'If the user asks about topics unrelated to the provided documents, politely decline and steer back to the documents.' },
+const SNIPPETS: { key: string; text: string; searchTerms: string[] }[] = [
+  { key: 'snippet.noHallucination', text: 'If the context does not contain the answer, state clearly that you do not know based on the provided documents.', searchTerms: ['hallucina', 'not in the context', 'do not know', 'no invent'] },
+  { key: 'snippet.stepByStep', text: 'Walk through your reasoning step-by-step before stating the final answer.', searchTerms: ['step-by-step', 'paso a paso', 'reasoning', 'razonamiento'] },
+  { key: 'snippet.concise', text: 'Keep answers concise. Avoid filler words and redundant restatements of the question.', searchTerms: ['concise', 'conciso', 'short', 'corto', 'no filler'] },
+  { key: 'snippet.formal', text: 'Maintain a formal, professional tone. Avoid colloquialisms and emojis.', searchTerms: ['formal', 'professional', 'profesional', 'emoji'] },
+  { key: 'snippet.markdown', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative.', searchTerms: ['markdown', 'bullet', 'lista', 'table', 'tabla', 'code block'] },
+  { key: 'snippet.refuseOutOfScope', text: 'If the user asks about topics unrelated to the provided documents, politely decline and steer back to the documents.', searchTerms: ['out-of-scope', 'fuera de contexto', 'unrelated', 'decline', 'rechaza'] },
 ];
 
 const INSTRUCTION_TEMPLATES: { key: string; instructions: string }[] = [
@@ -2342,7 +2342,13 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     {showSnippets === 'edit' && (
                       <div className="absolute right-0 top-full mt-3 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm max-h-60 overflow-y-auto">
                         {(() => {
-                          const available = SNIPPETS.filter(sn => !editAsstConfig.instructions.includes(sn.text));
+                          const available = SNIPPETS.filter(sn => {
+                            const instr = editAsstConfig.instructions.toLowerCase();
+                            const literal = sn.text.toLowerCase();
+                            if (instr.includes(literal)) return false;
+                            const hasKeywords = sn.searchTerms.some(term => instr.includes(term.toLowerCase()));
+                            return !hasKeywords;
+                          });
                           return (
                             <>
                               {available.length > 1 && (
@@ -2514,7 +2520,13 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                           {showSnippets === 'create' && (
                             <div className="absolute right-0 top-full mt-2.5 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm max-h-60 overflow-y-auto mb-4">
                               {(() => {
-                                const available = SNIPPETS.filter(sn => !newAsstConfig.instructions.includes(sn.text));
+                                const available = SNIPPETS.filter(sn => {
+                                  const instr = newAsstConfig.instructions.toLowerCase();
+                                  const literal = sn.text.toLowerCase();
+                                  if (instr.includes(literal)) return false;
+                                  const hasKeywords = sn.searchTerms.some(term => instr.includes(term.toLowerCase()));
+                                  return !hasKeywords;
+                                });
                                 return (
                                   <>
                                     {available.length > 1 && (
