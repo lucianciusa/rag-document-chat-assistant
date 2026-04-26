@@ -1,6 +1,6 @@
 # Lincite — Multi-Assistant RAG Platform
 
-A full-stack Retrieval-Augmented Generation platform where each AI assistant owns an isolated knowledge base. Upload documents, chat with grounded answers and inline citations, manage multiple specialised assistants, and deploy to Azure App Service in one push.
+A full-stack Retrieval-Augmented Generation platform where each AI assistant owns an isolated knowledge base. Upload documents, chat with grounded answers and grouped source citations, manage multiple specialised assistants, and deploy to Azure App Service in one push.
 
 ---
 
@@ -10,7 +10,7 @@ A full-stack Retrieval-Augmented Generation platform where each AI assistant own
 - **5-step creation wizard** — name, instructions (presets + snippets), avatar, knowledge base, review
 - **Isolated knowledge bases** — each assistant's documents are completely separated via `assistant_id` OData filters in Azure AI Search
 - **Streaming chat** — token-by-token responses via Server-Sent Events
-- **Grounded citations** — inline `[filename#i]` references with one-click snippet preview
+- **Grounded citations** — grouped source pills with one-click snippet preview
 - **Conversation management** — multiple sessions per assistant, rename, branch, regenerate, export as `.md` / `.pdf`
 - **Message feedback** — thumbs-up / thumbs-down stored per message
 - **AI avatar generation** — `gpt-image-2` generates a prompt-based icon; stored in Azure Blob Storage
