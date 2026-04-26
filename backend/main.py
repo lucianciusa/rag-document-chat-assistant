@@ -8,7 +8,7 @@ import uuid
 import httpx
 import traceback
 import base64
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Body
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response, FileResponse, JSONResponse, StreamingResponse
@@ -80,6 +80,7 @@ except Exception as e:
 
 
 app = FastAPI(title="Multi-Assistant RAG API")
+router = APIRouter(prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
@@ -116,7 +117,7 @@ async def startup_event():
         os.makedirs("uploads", exist_ok=True)
         os.makedirs("uploads/avatars", exist_ok=True)
 
-@app.post("/assistants/")
+@router.post("/assistants/")
 async def create_assistant(
     name: str = Form(...),
     instructions: str = Form(...),
@@ -141,7 +142,7 @@ async def create_assistant(
     
     return assistant
 
-@app.get("/assistants/")
+@router.get("/assistants/")
 def list_assistants(db: Session = Depends(get_db)):
     return db.query(Assistant).order_by(Assistant.pinned.desc(), Assistant.sort_order.asc(), Assistant.created_at.asc()).all()
 
@@ -157,7 +158,7 @@ class ReorderPayload(BaseModel):
     items: List[ReorderItem]
 
 # ---------------------------------------------------------------------------
-@app.put("/assistants/order")
+@router.put("/assistants/order")
 def reorder_assistants(payload: ReorderPayload, db: Session = Depends(get_db)):
     for it in payload.items:
         a = db.query(Assistant).filter(Assistant.id == it.id).first()
@@ -169,7 +170,7 @@ def reorder_assistants(payload: ReorderPayload, db: Session = Depends(get_db)):
     return {"status": "ok"}
 
 
-@app.put("/assistants/{assistant_id}")
+@router.put("/assistants/{assistant_id}")
 async def update_assistant(
     assistant_id: str,
     name: str = Form(...),
@@ -209,7 +210,7 @@ async def update_assistant(
     db.refresh(assistant)
     return assistant
 
-@app.post("/assistants/{assistant_id}/avatar/upload")
+@router.post("/assistants/{assistant_id}/avatar/upload")
 def upload_avatar(
     assistant_id: str,
     image: UploadFile = File(...),
@@ -234,7 +235,7 @@ def upload_avatar(
     db.refresh(assistant)
     return {"image_url": assistant.image_url}
 
-@app.post("/assistants/{assistant_id}/avatar/generate")
+@router.post("/assistants/{assistant_id}/avatar/generate")
 def generate_avatar(
     assistant_id: str,
     db: Session = Depends(get_db)
@@ -279,7 +280,7 @@ def generate_avatar(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
-@app.get("/avatars/{filename}")
+@router.get("/avatars/{filename}")
 def serve_avatar(filename: str):
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -290,7 +291,7 @@ def serve_avatar(filename: str):
     content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
     return Response(content=data, media_type=content_type)
 
-@app.delete("/avatars/{filename}")
+@router.delete("/avatars/{filename}")
 def delete_avatar_endpoint(filename: str):
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -299,7 +300,7 @@ def delete_avatar_endpoint(filename: str):
         return {"status": "deleted"}
     return {"status": "not found"}
 
-@app.delete("/assistants/{assistant_id}")
+@router.delete("/assistants/{assistant_id}")
 def delete_assistant(assistant_id: str, db: Session = Depends(get_db)):
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     if not assistant:
@@ -322,7 +323,7 @@ def delete_assistant(assistant_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "deleted"}
 
-@app.post("/assistants/{assistant_id}/documents/")
+@router.post("/assistants/{assistant_id}/documents/")
 def upload_document(assistant_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     if not assistant: return {"error": "Assistant not found"}
@@ -343,11 +344,11 @@ def upload_document(assistant_id: str, file: UploadFile = File(...), db: Session
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/assistants/{assistant_id}/documents/")
+@router.get("/assistants/{assistant_id}/documents/")
 def list_documents(assistant_id: str, db: Session = Depends(get_db)):
     return db.query(Document).filter(Document.assistant_id == assistant_id).all()
 
-@app.delete("/documents/{doc_id}")
+@router.delete("/documents/{doc_id}")
 def delete_document(doc_id: str, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc: raise HTTPException(status_code=404, detail="Document not found")
@@ -361,7 +362,7 @@ def delete_document(doc_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "deleted"}
 
-@app.get("/documents/{doc_id}/preview")
+@router.get("/documents/{doc_id}/preview")
 def preview_document(doc_id: str, db: Session = Depends(get_db)):
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc: raise HTTPException(status_code=404, detail="Document not found")
@@ -380,7 +381,7 @@ def preview_document(doc_id: str, db: Session = Depends(get_db)):
         return JSONResponse({"type": ext.lstrip("."), "filename": doc.filename, "content": content})
     raise HTTPException(status_code=400, detail="Preview not supported for this type")
 
-@app.post("/assistants/{assistant_id}/sessions/")
+@router.post("/assistants/{assistant_id}/sessions/")
 def create_session(assistant_id: str, db: Session = Depends(get_db)):
     session = ChatSession(assistant_id=assistant_id, title="New Conversation")
     db.add(session)
@@ -388,11 +389,11 @@ def create_session(assistant_id: str, db: Session = Depends(get_db)):
     db.refresh(session)
     return session
 
-@app.get("/assistants/{assistant_id}/sessions/")
+@router.get("/assistants/{assistant_id}/sessions/")
 def list_sessions(assistant_id: str, db: Session = Depends(get_db)):
     return db.query(ChatSession).filter(ChatSession.assistant_id == assistant_id).order_by(ChatSession.updated_at.desc()).all()
 
-@app.get("/sessions/recent")
+@router.get("/sessions/recent")
 def get_recent_sessions(limit: int = 5, db: Session = Depends(get_db)):
     sessions = (
         db.query(ChatSession)
@@ -414,7 +415,7 @@ def get_recent_sessions(limit: int = 5, db: Session = Depends(get_db)):
     return result
 
 
-@app.post("/sessions/{session_id}/chat/")
+@router.post("/sessions/{session_id}/chat/")
 async def send_chat_message(session_id: str, request: dict, db: Session = Depends(get_db)):
     query = request.get("query")
     chat_session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
@@ -432,7 +433,7 @@ async def send_chat_message(session_id: str, request: dict, db: Session = Depend
     db.commit()
     return {"reply": reply, "citations": cites, "created_at": ai_msg.created_at.isoformat() + "Z"}
 
-@app.get("/sessions/{session_id}/history/")
+@router.get("/sessions/{session_id}/history/")
 def get_session_history(session_id: str, db: Session = Depends(get_db)):
     messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc()).all()
     res = []
@@ -448,7 +449,7 @@ def get_session_history(session_id: str, db: Session = Depends(get_db)):
         })
     return res
 
-@app.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}")
 def delete_session(session_id: str, db: Session = Depends(get_db)):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if session:
@@ -456,7 +457,7 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
         db.commit()
     return {"status": "deleted"}
 
-@app.post("/sessions/{session_id}/chat/stream")
+@router.post("/sessions/{session_id}/chat/stream")
 async def send_chat_message_stream(session_id: str, request: dict, db: Session = Depends(get_db)):
     query = request.get("query")
     chat_session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
@@ -500,7 +501,7 @@ async def send_chat_message_stream(session_id: str, request: dict, db: Session =
 
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-@app.post("/messages/{message_id}/feedback")
+@router.post("/messages/{message_id}/feedback")
 def set_message_feedback(message_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
     msg = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
     if msg:
@@ -508,7 +509,7 @@ def set_message_feedback(message_id: int, payload: dict = Body(...), db: Session
         db.commit()
     return {"status": "ok"}
 
-@app.put("/sessions/{session_id}/title")
+@router.put("/sessions/{session_id}/title")
 def rename_session(session_id: str, payload: dict = Body(...), db: Session = Depends(get_db)):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if session:
@@ -517,7 +518,7 @@ def rename_session(session_id: str, payload: dict = Body(...), db: Session = Dep
         db.refresh(session)
     return session
 
-@app.post("/sessions/{session_id}/regenerate/stream")
+@router.post("/sessions/{session_id}/regenerate/stream")
 async def regenerate_last_stream(session_id: str, db: Session = Depends(get_db)):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     msgs = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).all()
@@ -566,12 +567,12 @@ async def regenerate_last_stream(session_id: str, db: Session = Depends(get_db))
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.get("/sessions/{session_id}/search")
+@router.get("/sessions/{session_id}/search")
 def search_session_messages(session_id: str, q: str = "", db: Session = Depends(get_db)):
     msgs = db.query(ChatMessage).filter(ChatMessage.session_id == session_id, ChatMessage.content.ilike(f"%{q}%")).all()
     return [{"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at.isoformat() + "Z"} for m in msgs]
 
-@app.post("/assistants/{assistant_id}/clone")
+@router.post("/assistants/{assistant_id}/clone")
 def clone_assistant(assistant_id: str, db: Session = Depends(get_db)):
     src = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     cloned = Assistant(name=f"{src.name} (Copy)", description=src.description, instructions=src.instructions)
@@ -580,7 +581,7 @@ def clone_assistant(assistant_id: str, db: Session = Depends(get_db)):
     db.refresh(cloned)
     return cloned
 
-@app.post("/sessions/{session_id}/branch")
+@router.post("/sessions/{session_id}/branch")
 def branch_session(session_id: str, payload: dict = Body(...), db: Session = Depends(get_db)):
     src = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     msgs = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc()).all()
@@ -600,7 +601,7 @@ def branch_session(session_id: str, payload: dict = Body(...), db: Session = Dep
 
 EXPORT_SCHEMA_VERSION = 1
 
-@app.get("/assistants/{assistant_id}/export")
+@router.get("/assistants/{assistant_id}/export")
 def export_assistant(assistant_id: str, db: Session = Depends(get_db)):
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     if not assistant:
@@ -651,7 +652,7 @@ def export_assistant(assistant_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/assistants/import")
+@router.post("/assistants/import")
 async def import_assistant(file: UploadFile = File(...), db: Session = Depends(get_db)):
     raw = await file.read()
     try:
@@ -731,7 +732,7 @@ async def import_assistant(file: UploadFile = File(...), db: Session = Depends(g
     return result
 
 
-@app.get("/stats")
+@router.get("/stats")
 def get_stats(db: Session = Depends(get_db)):
     return {
         "assistants": db.query(Assistant).count(),
@@ -746,22 +747,24 @@ def get_stats(db: Session = Depends(get_db)):
 # Path to the frontend/dist directory (where npm run build puts files)
 FRONTEND_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
 
+app.include_router(router)
+
 if os.path.exists(FRONTEND_PATH):
     # Mount the static files (JS, CSS, etc.)
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_PATH, "assets")), name="assets")
-    
+
     # Catch-all route for React Router (serves index.html for any unknown route)
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        # If the path looks like an API call, return 404 (prevents infinite loop if API is missing)
+        # Let API and avatar requests fall through to their handlers
         if full_path.startswith("api/") or full_path.startswith("avatars/"):
             raise HTTPException(status_code=404, detail="Not Found")
-            
-        # Check if the file exists (e.g. favicon.ico)
+
+        # Serve known static files (favicon, etc.)
         file_path = os.path.join(FRONTEND_PATH, full_path)
         if os.path.isfile(file_path):
             return FileResponse(file_path)
-            
+
         # Default to index.html for SPA routing
         return FileResponse(os.path.join(FRONTEND_PATH, "index.html"))
 else:

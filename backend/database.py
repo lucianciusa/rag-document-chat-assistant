@@ -6,10 +6,10 @@ import uuid
 
 def _build_engine():
     """
-    Build SQLAlchemy engine.
+    Build SQLAlchemy engine using pymssql (no system ODBC driver required).
     Supports two Azure SQL connection string formats:
-      1. SQLAlchemy URL:  mssql+pyodbc://user:pass@server/db?driver=...
-      2. ODBC format:     Driver={...};Server=tcp:...;Database=...;Uid=...;Pwd=...
+      1. SQLAlchemy URL:  mssql+pymssql://user:pass@host/db
+      2. ODBC format:     Driver={...};Server=tcp:host,1433;Database=db;Uid=user;Pwd={pass};...
     Falls back to local SQLite if not configured or on parse failure.
     """
     conn = os.getenv("AZURE_SQL_CONNECTION_STRING", "").strip()
@@ -18,8 +18,8 @@ def _build_engine():
         print("[Database] Using local SQLite")
         return create_engine("sqlite:///./rag_assistants.db", connect_args={"check_same_thread": False})
 
-    # Already a SQLAlchemy URL
-    if conn.startswith("mssql+pyodbc://"):
+    # Already a SQLAlchemy pymssql URL
+    if conn.startswith("mssql+pymssql://"):
         try:
             engine = create_engine(conn, pool_pre_ping=True, pool_recycle=300)
             print("[Database] Using Azure SQL Database")
@@ -28,34 +28,28 @@ def _build_engine():
             print(f"[Database] Failed to connect to Azure SQL ({e}). Falling back to SQLite.")
             return create_engine("sqlite:///./rag_assistants.db", connect_args={"check_same_thread": False})
 
-    # ODBC / ADO.NET format from Azure Portal — parse and convert
-    # Example: Driver={ODBC Driver 18 for SQL Server};Server=tcp:server.database.windows.net,1433;Database=db;Uid=user;Pwd={pass};Encrypt=yes;...
+    # ODBC / ADO.NET format from Azure Portal — parse and convert to pymssql URL
+    # Example: Driver={...};Server=tcp:server.database.windows.net,1433;Database=db;Uid=user;Pwd={pass};...
     try:
         import re
+        from urllib.parse import quote_plus
+
         def _odbc_val(key):
-            """Extract a value from a semicolon-delimited key=value ODBC string."""
             m = re.search(rf"(?:^|;){re.escape(key)}=([^;]+)", conn, re.IGNORECASE)
             return m.group(1).strip().strip("{}") if m else ""
 
-        server_raw = _odbc_val("Server")          # tcp:host,1433
+        server_raw = _odbc_val("Server")   # tcp:host,1433
         database   = _odbc_val("Database")
         uid        = _odbc_val("Uid")
         pwd        = _odbc_val("Pwd")
-        encrypt    = _odbc_val("Encrypt") or "yes"
-        trust_cert = _odbc_val("TrustServerCertificate") or "no"
 
-        # Strip "tcp:" prefix and port from server
+        # Strip "tcp:" prefix and port — pymssql URL uses host only
         host_port = re.sub(r"^tcp:", "", server_raw)
         host = host_port.split(",")[0].strip()
 
-        from urllib.parse import quote_plus
-        params = quote_plus(
-            f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={host};DATABASE={database};"
-            f"UID={uid};PWD={pwd};Encrypt={encrypt};TrustServerCertificate={trust_cert};"
-        )
-        url = f"mssql+pyodbc:///?odbc_connect={params}"
+        url = f"mssql+pymssql://{quote_plus(uid)}:{quote_plus(pwd)}@{host}/{database}"
         engine = create_engine(url, pool_pre_ping=True, pool_recycle=300)
-        print("[Database] Using Azure SQL Database (parsed from ODBC connection string)")
+        print("[Database] Using Azure SQL Database (pymssql, parsed from ODBC string)")
         return engine
     except Exception as e:
         print(f"[Database] Failed to parse/connect Azure SQL ODBC string ({e}). Falling back to SQLite.")

@@ -7,7 +7,7 @@ openai
 azure-search-documents
 azure-core
 azure-storage-blob
-pyodbc
+pymssql
 requests
 pymupdf
 python-docx
