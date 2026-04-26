@@ -2,7 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Custom scrollbar for better UX */
+/* ── Pantone palette: Cerulean cool blue-gray (light mode) ───────────── */
+:root {
+  --slate-50:  240 245 248;
+  --slate-100: 224 234 243;
+  --slate-200: 196 216 230;
+  --slate-300: 154 186 206;
+  --slate-400: 108 154 178;
+  --slate-500:  72 120 146;
+  --slate-600:  50  88 112;
+  --slate-700:  34  62  83;
+  --slate-800:  20  40  56;
+  --slate-900:  11  24  36;
+  --slate-950:   6  14  22;
+}
+
+/* ── Pantone palette: warm greige (dark mode) ────────────────────────── */
+.dark {
+  --slate-50:  249 247 244;
+  --slate-100: 242 239 233;
+  --slate-200: 228 222 212;
+  --slate-300: 201 194 184;
+  --slate-400: 163 156 149;
+  --slate-500: 122 115 107;
+  --slate-600:  94  87  80;
+  --slate-700:  70  64  58;
+  --slate-800:  48  43  38;
+  --slate-900:  33  29  25;
+  --slate-950:  21  18  16;
+}
+
+/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -11,20 +41,19 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: rgb(154 186 206); /* slate-300 light */
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: rgb(108 154 178); /* slate-400 light */
 }
 
-/* Dark theme scrollbar */
 .dark ::-webkit-scrollbar-track {
   background: transparent;
 }
 .dark ::-webkit-scrollbar-thumb {
-  background: #334155; /* slate-700 */
+  background: rgb(70 64 58); /* slate-700 dark */
 }
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: #475569; /* slate-600 */
+  background: rgb(94 87 80); /* slate-600 dark */
 }

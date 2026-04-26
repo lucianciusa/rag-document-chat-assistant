@@ -76,17 +76,16 @@ class BlobStorageManager:
     def get_document_local_path(self, filename: str) -> str:
         """
         Return a local file path for the document.
-        For Azure mode, downloads to a temp file first.
-        Required for parsers that need a file path (PyMuPDF, python-docx, etc.)
+        For Azure mode, downloads to a system temp file first.
         """
         if self.mode == "azure":
-            temp_dir = os.path.join("uploads", "_temp")
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, filename)
+            import tempfile
+            ext = os.path.splitext(filename)[1]
+            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
             data = self.get_document_bytes(filename)
-            with open(temp_path, "wb") as f:
-                f.write(data)
-            return temp_path
+            tmp.write(data)
+            tmp.close()
+            return tmp.name
         else:
             return os.path.join("uploads", filename)
 

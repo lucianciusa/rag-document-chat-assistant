@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, ArrowRight, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal } from 'lucide-react';
+import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal, Quote, Globe, Folder, Github, ChevronDown, Cpu } from 'lucide-react';
+import { useT } from './i18n';
 
 interface Assistant {
   id: string;
@@ -30,9 +31,25 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   citations?: string[];
+  context?: string[];
   feedback?: number | null;
   created_at?: string;
   streaming?: boolean;
+}
+
+interface AppStats {
+  assistants: number;
+  documents: number;
+  sessions: number;
+}
+
+interface RecentSession {
+  id: string;
+  title: string;
+  updated_at: string | null;
+  assistant_id: string;
+  assistant_name: string;
+  assistant_image_url: string | null;
 }
 
 const SNIPPETS: { label: string; text: string }[] = [
@@ -41,16 +58,111 @@ const SNIPPETS: { label: string; text: string }[] = [
   { label: 'Step-by-step reasoning', text: 'Walk through your reasoning step-by-step before stating the final answer.' },
   { label: 'Concise tone', text: 'Keep answers concise. Avoid filler words and redundant restatements of the question.' },
   { label: 'Formal register', text: 'Maintain a formal, professional tone. Avoid colloquialisms and emojis.' },
-  { label: 'Markdown formatting', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative.' },
+  { label: 'Markdown formatting', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative. Always cite sources as [filename.pdf].' },
   { label: 'Refuse out-of-scope', text: 'If the user asks about topics unrelated to the provided documents, politely decline and steer back to the documents.' },
 ];
 
+const INSTRUCTION_TEMPLATES: { label: string; description: string; instructions: string }[] = [
+  { label: 'General Assistant', description: 'Helpful answers from your documents', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' },
+  { label: 'Legal Advisor', description: 'Precise, citation-backed legal analysis', instructions: 'You are a legal analysis assistant. Provide precise, citation-backed legal interpretations based only on the provided documents. Always clarify that your analysis is informational, not legal advice.' },
+  { label: 'Code Reviewer', description: 'Bug detection & best-practice feedback', instructions: 'You are a senior code reviewer. Analyze code snippets and documents for bugs, security vulnerabilities, and best-practice violations. Provide actionable suggestions with corrected code examples.' },
+  { label: 'Medical Research', description: 'Clinical findings & study summaries', instructions: 'You are a medical research assistant. Summarize clinical findings, compare study methodologies, and extract key data points from provided medical documents. Always note limitations and recommend professional consultation.' },
+  { label: 'Academic Tutor', description: 'Step-by-step concept explanations', instructions: 'You are an academic tutor. Explain concepts from the provided materials in clear, simple language. Use examples, analogies, and step-by-step breakdowns. Ask follow-up questions to check understanding.' },
+  { label: 'Compliance Auditor', description: 'Policy gap detection & risk flagging', instructions: 'You are a compliance and policy auditor. Analyze provided documents against regulatory frameworks and internal policies. Flag non-compliant sections, assess risk levels, and suggest remediation steps.' },
+];
+
+function HighlightedText({ text, highlight, isMarkdown = false }: { text: string; highlight?: string; isMarkdown?: boolean }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (highlight && containerRef.current) {
+      const timer = setTimeout(() => {
+        const mark = containerRef.current?.querySelector('mark');
+        if (mark) {
+          mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          mark.classList.add('ring-4', 'ring-yellow-400/50', 'scale-105', 'transition-all', 'duration-500');
+          setTimeout(() => {
+            if (mark) mark.classList.remove('ring-4', 'ring-yellow-400/50', 'scale-105');
+          }, 2000);
+        }
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [highlight, text]);
+
+  if (!highlight) {
+    if (isMarkdown) return <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>;
+    return <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{text}</pre>;
+  }
+
+  // Sort snippets by length (longest first) to avoid partial matches when one is a substring of another
+  const highlightParts = highlight.split('\n\n---\n\n').filter(Boolean).sort((a, b) => b.length - a.length);
+
+  const wrapMatches = (input: string): (string | React.ReactElement)[] => {
+    if (!input) return [];
+    let parts: (string | React.ReactElement)[] = [input];
+    
+    highlightParts.forEach(h => {
+      const escaped = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`(${escaped})`, 'gi');
+      
+      const newParts: (string | React.ReactElement)[] = [];
+      parts.forEach(p => {
+        if (typeof p === 'string') {
+          const split = p.split(regex);
+          split.forEach(s => {
+            if (s.toLowerCase() === h.toLowerCase()) {
+              newParts.push(<mark className="bg-yellow-200 dark:bg-yellow-400/40 text-slate-900 dark:text-white rounded px-0.5 font-medium shadow-sm border-b border-yellow-400/50">{s}</mark>);
+            } else {
+              newParts.push(s);
+            }
+          });
+        } else {
+          newParts.push(p);
+        }
+      });
+      parts = newParts;
+    });
+    return parts;
+  };
+
+  if (isMarkdown) {
+    return (
+      <div ref={containerRef} className="grounded-preview-container">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            // Custom renderer for text nodes to inject highlights
+            text: (props) => {
+              const parts = wrapMatches(String(props.children));
+              return <>{parts.map((p, i) => <React.Fragment key={i}>{p}</React.Fragment>)}</>;
+            }
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="grounded-preview-container">
+      <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">
+        {wrapMatches(text)}
+      </pre>
+    </div>
+  );
+}
+
 export default function App() {
+  const { t, lang, setLang } = useT();
+
   const [assistants, setAssistants] = useState<Assistant[]>([]);
   const [selectedAssistant, setSelectedAssistant] = useState<Assistant | null>(null);
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSession, setSelectedSession] = useState<ChatSession | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -74,6 +186,9 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [showChatsPane, setShowChatsPane] = useState(true);
   const [newAsstImage, setNewAsstImage] = useState<File | null>(null);
+  const [pendingDocs, setPendingDocs] = useState<File[]>([]);
+  const [wizardDragOver, setWizardDragOver] = useState(false);
+  const [creationProgress, setCreationProgress] = useState<{ current: number; total: number } | null>(null);
   const [editAsstImage, setEditAsstImage] = useState<File | null>(null);
   const [removeEditImage, setRemoveEditImage] = useState(false);
   const [generatingAssistantId, setGeneratingAssistantId] = useState<string | null>(null);
@@ -81,10 +196,10 @@ export default function App() {
   const [showSaveWhileGeneratingModal, setShowSaveWhileGeneratingModal] = useState(false);
   const [generationTime, setGenerationTime] = useState(0);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
-  
+
   const [toastConfig, setToastConfig] = useState<{
-    type: 'success' | 'info' | 'error', 
-    title: string, 
+    type: 'success' | 'info' | 'error',
+    title: string,
     description: string,
     action?: { label: string, onClick: () => void }
   } | null>(null);
@@ -102,8 +217,8 @@ export default function App() {
   };
 
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [previewDoc, setPreviewDoc] = useState<{id: string, filename: string} | null>(null);
-  const [previewContent, setPreviewContent] = useState<{type: string, filename: string, content?: string, blobUrl?: string} | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ id: string, filename: string } | null>(null);
+  const [previewContent, setPreviewContent] = useState<{ type: string, filename: string, content?: string, blobUrl?: string, highlightText?: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   // New feature state
@@ -111,26 +226,62 @@ export default function App() {
   const [renamingDraft, setRenamingDraft] = useState('');
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
-  const [chatSearchResults, setChatSearchResults] = useState<{id: number, role: string, content: string, created_at?: string}[]>([]);
+  const [chatSearchResults, setChatSearchResults] = useState<any[]>([]);
+  const [loadingDots, setLoadingDots] = useState('.');
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Loading dots animation
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setLoadingDots(prev => {
+        if (prev === '...') return '.';
+        if (prev === '..') return '...';
+        return '..';
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto-scroll effect
+  useEffect(() => {
+    if (isAutoScrollingRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [messages]);
+
   const [showSnippets, setShowSnippets] = useState<'edit' | 'create' | null>(null);
   const [draggingAssistantId, setDraggingAssistantId] = useState<string | null>(null);
   const [dragOverAssistantId, setDragOverAssistantId] = useState<string | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [assistantMenuOpen, setAssistantMenuOpen] = useState<string | null>(null);
+
+  // Homepage extras
+  const [homeSearch, setHomeSearch] = useState('');
+  const [homeSort, setHomeSort] = useState<'default' | 'alpha' | 'recent'>('default');
+  const [stats, setStats] = useState<AppStats | null>(null);
+  const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [showImportInfo, setShowImportInfo] = useState(false);
   const streamAbortRef = useRef<AbortController | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const chatSearchInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const wizardDocInputRef = useRef<HTMLInputElement>(null);
   const newAvatarInputRef = useRef<HTMLInputElement>(null);
   const editAvatarInputRef = useRef<HTMLInputElement>(null);
   const isAutoScrollingRef = useRef(false);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Initialization
   useEffect(() => {
     fetchAssistants();
+    fetchStats();
+    fetchRecentSessions();
   }, []);
 
   useEffect(() => {
@@ -172,12 +323,12 @@ export default function App() {
     }
   }, [selectedAssistant]);
 
-  // Update when session selected
+  // Update when session selected - ONLY on ID change
   useEffect(() => {
-    if (selectedSession) {
+    if (selectedSession?.id) {
       fetchHistory(selectedSession.id);
     }
-  }, [selectedSession]);
+  }, [selectedSession?.id]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -235,24 +386,41 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAssistant, selectedSession, chatSearchOpen, showExportMenu, assistantMenuOpen, renamingSessionId, previewImageUrl, previewDoc, showCancelAvatarModal, showSaveWhileGeneratingModal, showEditModal, showAddModal, assistantToDelete, sessionToDelete, documentToDelete]);
 
+  // Click outside to close menus
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (showExportMenu && !target.closest('.export-menu-container')) setShowExportMenu(false);
+      if (showSnippets && !target.closest('.snippets-menu-container')) setShowSnippets(null);
+      if (assistantMenuOpen && !target.closest('.assistant-menu-container')) setAssistantMenuOpen(null);
+      if (previewDoc && !target.closest('.preview-modal-content')) closePreview();
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showExportMenu, showSnippets, assistantMenuOpen, previewDoc]);
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    if (isAutoScrollingRef.current) {
-      clearTimeout((isAutoScrollingRef as any).timeout);
-      (isAutoScrollingRef as any).timeout = setTimeout(() => {
-        isAutoScrollingRef.current = false;
-        setShowScrollButton(false);
-      }, 300);
-      return;
-    }
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+
+    if (isAutoScrollingRef.current) {
+      // During auto-scroll, we always hide the button and extend the auto-scroll state
+      setShowScrollButton(false);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => { 
+        isAutoScrollingRef.current = false; 
+      }, 500);
+      return;
+    }
+    
     setShowScrollButton(!isNearBottom);
   };
 
   const scrollToBottom = () => {
     isAutoScrollingRef.current = true;
     setShowScrollButton(false);
-    (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
@@ -269,6 +437,20 @@ export default function App() {
     }
   };
 
+  const fetchStats = async () => {
+    try {
+      const res = await fetch('/api/stats');
+      if (res.ok) setStats(await res.json());
+    } catch { /* non-fatal */ }
+  };
+
+  const fetchRecentSessions = async () => {
+    try {
+      const res = await fetch('/api/sessions/recent?limit=5');
+      if (res.ok) setRecentSessions(await res.json());
+    } catch { /* non-fatal */ }
+  };
+
   const handleCreateAssistant = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAsstConfig.name || !newAsstConfig.instructions) return;
@@ -283,17 +465,46 @@ export default function App() {
 
     try {
       const res = await fetch('/api/assistants/', { method: 'POST', body: formData });
-      if (res.ok) {
-        setShowAddModal(false);
-        setWizardStep(0);
-        setNewAsstConfig({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
-        setNewAsstImage(null);
-        fetchAssistants();
-        showToast('success', 'Assistant Created', `${newAsstConfig.name} has been successfully created.`);
+      if (!res.ok) throw new Error();
+      const created = await res.json();
+
+      const docsToUpload = [...pendingDocs];
+      setShowAddModal(false);
+      setWizardStep(0);
+      setNewAsstConfig({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
+      setNewAsstImage(null);
+      setPendingDocs([]);
+
+      if (docsToUpload.length === 0) {
+        fetchAssistants(); fetchStats(); fetchRecentSessions();
+        showToast('success', t('toast.assistant.created'), t('toast.assistant.created.msg', { name: created.name }));
+        return;
+      }
+
+      setCreationProgress({ current: 0, total: docsToUpload.length });
+      let failed = 0;
+      for (let i = 0; i < docsToUpload.length; i++) {
+        setCreationProgress({ current: i + 1, total: docsToUpload.length });
+        const fd = new FormData();
+        fd.append('file', docsToUpload[i]);
+        try {
+          const r = await fetch(`/api/assistants/${created.id}/documents/`, { method: 'POST', body: fd });
+          if (!r.ok) failed++;
+        } catch {
+          failed++;
+        }
+      }
+      setCreationProgress(null);
+      fetchAssistants(); fetchStats(); fetchRecentSessions();
+
+      if (failed === 0) {
+        showToast('success', t('toast.assistant.created'), t('toast.assistant.created.docs', { name: created.name, n: docsToUpload.length, s: docsToUpload.length > 1 ? 's' : '' }));
+      } else {
+        showToast('info', t('toast.assistant.created'), t('toast.assistant.created.warn', { name: created.name, n: failed, s: failed > 1 ? 's' : '' }));
       }
     } catch (e) {
       console.error(e);
-      showToast('error', 'Creation Failed', 'There was an error creating the assistant.');
+      showToast('error', t('toast.err.creation'), t('toast.err.creation.msg'));
     }
   };
   // Sync edits to pending background state so they aren't lost
@@ -345,7 +556,7 @@ export default function App() {
       originalAsst?.instructions !== editAsstConfig.instructions;
 
     if (!hasChanges) {
-      showToast('info', 'No Changes Made', 'Your assistant configuration was already up to date.');
+      showToast('info', t('toast.assistant.noChanges'), t('toast.assistant.noChanges.msg'));
       setShowEditModal(false);
       return;
     }
@@ -380,17 +591,17 @@ export default function App() {
           delete copy[editAsstConfig.id];
           return copy;
         });
-        showToast('success', 'Changes Saved', 'Assistant configuration updated successfully.');
+        showToast('success', t('toast.assistant.saved'), t('toast.assistant.saved.msg'));
       }
     } catch (e) {
       console.error(e);
-      showToast('error', 'Update Failed', 'There was an error updating the assistant.');
+      showToast('error', t('toast.err.update'), t('toast.err.update.msg'));
     }
   };
 
-  const handleEditAssistantClick = (assistant: Assistant, e: React.MouseEvent) => {
-    e.stopPropagation();
-    
+  const handleEditAssistantClick = (assistant: Assistant, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+
     // Restore any pending edits for this assistant if they exist
     if (pendingEdits[assistant.id]) {
       setEditAsstConfig(pendingEdits[assistant.id].config);
@@ -407,24 +618,25 @@ export default function App() {
       setEditAsstImage(null);
       setRemoveEditImage(false);
     }
-    
+
     setShowEditModal(true);
   };
 
-  const handlePreviewDocument = async (doc: {id: string, filename: string}) => {
+  const handlePreviewDocument = async (doc: { id: string; filename: string }, highlightText?: string) => {
     setPreviewDoc(doc);
     setPreviewLoading(true);
     setPreviewContent(null);
     const ext = doc.filename.split('.').pop()?.toLowerCase() || '';
     try {
       const res = await fetch(`/api/documents/${doc.id}/preview`);
+
       if (!res.ok) throw new Error('Failed to load preview');
       if (['md', 'txt', 'csv', 'docx', 'pptx'].includes(ext)) {
         const data = await res.json();
-        setPreviewContent({ type: data.type, filename: data.filename, content: data.content });
+        setPreviewContent({ type: data.type, filename: data.filename, content: data.content, highlightText });
       } else if (ext === 'pdf') {
         const blob = await res.blob();
-        setPreviewContent({ type: 'pdf', filename: doc.filename, blobUrl: URL.createObjectURL(blob) });
+        setPreviewContent({ type: 'pdf', filename: doc.filename, blobUrl: URL.createObjectURL(blob), highlightText });
       } else if (['png', 'jpg', 'jpeg', 'bmp'].includes(ext)) {
         const blob = await res.blob();
         setPreviewContent({ type: 'image', filename: doc.filename, blobUrl: URL.createObjectURL(blob) });
@@ -445,7 +657,7 @@ export default function App() {
 
   const handleGenerateAvatar = async (assistantId: string) => {
     if (generatingAssistantId && generatingAssistantId !== assistantId) {
-      showToast('error', 'Generation in Progress', 'An avatar is already being generated for another assistant.');
+      showToast('error', t('toast.avatar.inProgress'), t('toast.avatar.inProgress.msg'));
       return;
     }
 
@@ -483,16 +695,20 @@ export default function App() {
           return prev;
         });
 
-        showToast('success', 'Generation Complete', 'Your new avatar is ready to review.', {
-          label: 'Review',
+        showToast('success', t('toast.avatar.complete'), t('toast.avatar.complete.msg'), {
+          label: t('toast.avatar.review'),
           onClick: () => {
-            const assistant = assistants.find(a => a.id === assistantId);
-            if (assistant) handleEditAssistantClick(assistant, {} as any);
+            // Find by ID in the latest state to avoid stale closure issues
+            setAssistants(current => {
+              const assistant = current.find(a => a.id === assistantId);
+              if (assistant) handleEditAssistantClick(assistant);
+              return current;
+            });
           }
         });
       } else {
         const err = await res.json();
-        showToast('error', 'Generation Failed', err.detail || 'Failed to generate avatar');
+        showToast('error', t('toast.avatar.failed'), err.detail || t('toast.avatar.failed.msg'));
       }
     } catch (e: any) {
       if (e.name === 'AbortError') {
@@ -500,7 +716,7 @@ export default function App() {
         return;
       }
       console.error(e);
-      showToast('error', 'Generation Failed', 'Failed to generate avatar');
+      showToast('error', t('toast.avatar.failed'), t('toast.avatar.failed.msg'));
     } finally {
       setGeneratingAssistantId(null);
       abortControllerRef.current = null;
@@ -518,12 +734,12 @@ export default function App() {
       const res = await fetch(`/api/assistants/${assistantToDelete.id}`, { method: 'DELETE' });
       if (res.ok) {
         if (selectedAssistant?.id === assistantToDelete.id) setSelectedAssistant(null);
-        fetchAssistants();
-        showToast('success', 'Assistant Deleted', `Successfully deleted ${assistantToDelete.name}.`);
+        fetchAssistants(); fetchStats(); fetchRecentSessions();
+        showToast('success', t('toast.assistant.deleted'), t('toast.assistant.deleted.msg', { name: assistantToDelete.name }));
       }
     } catch (e) {
       console.error(e);
-      showToast('error', 'Deletion Failed', 'There was an error deleting the assistant.');
+      showToast('error', t('toast.err.delete'), t('toast.err.delete.msg'));
     }
     setAssistantToDelete(null);
   };
@@ -543,11 +759,11 @@ export default function App() {
           setMessages([]);
         }
         fetchSessions(selectedAssistant.id);
-        showToast('success', 'Chat Deleted', 'The conversation has been removed.');
+        showToast('success', t('toast.chat.deleted'), t('toast.chat.deleted.msg'));
       }
     } catch (e) {
       console.error(e);
-      showToast('error', 'Deletion Failed', 'There was an error deleting the conversation.');
+      showToast('error', t('toast.chat.deleteFailed'), t('toast.chat.deleteFailed.msg'));
     }
     setSessionToDelete(null);
   };
@@ -581,10 +797,18 @@ export default function App() {
       setMessages(data);
       isAutoScrollingRef.current = true;
       setShowScrollButton(false);
-      (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+      if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = setTimeout(() => { isAutoScrollingRef.current = false; }, 1500);
+
+      // Animation: scroll from top to bottom
       setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 50);
+        if (chatScrollRef.current) {
+          chatScrollRef.current.scrollTop = 0;
+          setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 100);
+        }
+      }, 100);
     } catch (e) {
       console.error(e);
     }
@@ -617,14 +841,14 @@ export default function App() {
         const res = await fetch(`/api/assistants/${selectedAssistant.id}/documents/`, { method: 'POST', body: formData });
         if (!res.ok) throw new Error();
       } catch (err) {
-        showToast('error', 'Upload Failed', `Failed to upload ${file.name}`);
+        showToast('error', t('toast.docs.uploadFailed'), t('toast.docs.uploadFailed.msg', { filename: file.name }));
       }
     }
 
     setUploading(false);
     fetchDocuments(selectedAssistant.id);
     if (fileInputRef.current) fileInputRef.current.value = '';
-    showToast('success', 'Files Uploaded', 'Your documents have been processed.');
+    showToast('success', t('toast.docs.uploaded'), t('toast.docs.uploaded.msg'));
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -665,11 +889,11 @@ export default function App() {
       const res = await fetch(`/api/documents/${documentToDelete.id}`, { method: 'DELETE' });
       if (res.ok) {
         if (selectedAssistant) fetchDocuments(selectedAssistant.id);
-        showToast('success', 'File Deleted', `Removed ${documentToDelete.filename} from the knowledge base.`);
+        showToast('success', t('toast.docs.deleted'), t('toast.docs.deleted.msg', { filename: documentToDelete.filename }));
       }
     } catch (e) {
       console.error(e);
-      showToast('error', 'Deletion Failed', 'There was an error deleting the file.');
+      showToast('error', t('toast.docs.deleteFailed'), t('toast.docs.deleteFailed.msg'));
     }
     setDocumentToDelete(null);
   };
@@ -682,8 +906,11 @@ export default function App() {
     streamAbortRef.current?.abort();
     streamAbortRef.current = new AbortController();
 
-    const placeholderIdx = messages.length; // approximate; actual index resolved via setter
-    setMessages(prev => [...prev, { role: 'assistant', content: '', streaming: true, created_at: new Date().toISOString() }]);
+    const streamId = `stream-${Date.now()}`;
+    setMessages(prev => [
+      ...prev.filter(m => !m.streaming), // Ensure no stale streaming messages
+      { id: streamId as any, role: 'assistant', content: '', streaming: true, created_at: new Date().toISOString() }
+    ]);
 
     try {
       const response = await fetch(`/api/sessions/${sessionId}/${endpoint}`, {
@@ -717,7 +944,14 @@ export default function App() {
             try {
               const evt = JSON.parse(json);
               if (evt.type === 'token') {
-                setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, content: m.content + evt.content } : m));
+                isAutoScrollingRef.current = true;
+                setShowScrollButton(false);
+                if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+                scrollTimeoutRef.current = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+
+                setMessages(prev => prev.map(m => m.id === streamId as any ? { ...m, content: m.content + evt.content } : m));
+                // Give React a chance to render if multiple tokens arrived in one buffer chunk
+                await new Promise(r => setTimeout(r, 0));
               } else if (evt.type === 'user_meta') {
                 // back-fill the user message id from the server
                 setMessages(prev => {
@@ -730,21 +964,20 @@ export default function App() {
                   return copy;
                 });
               } else if (evt.type === 'done') {
-                setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, id: evt.id, citations: evt.citations, created_at: evt.created_at, streaming: false } : m));
+                setMessages(prev => prev.map(m => m.id === streamId as any ? { ...m, id: evt.id, citations: evt.citations, context: evt.context, created_at: evt.created_at, streaming: false } : m));
                 if (selectedAssistant) fetchSessions(selectedAssistant.id);
               } else if (evt.type === 'error') {
-                setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, content: `Error: ${evt.message}`, streaming: false } : m));
+                setMessages(prev => prev.map(m => m.id === streamId as any ? { ...m, content: `Error: ${evt.message}`, streaming: false } : m));
               }
-            } catch {/* ignore malformed line */}
+            } catch {/* ignore malformed line */ }
           }
         }
       }
     } catch (e: any) {
       if (e.name !== 'AbortError') {
-        setMessages(prev => prev.map((m, i) => i === prev.length - 1 ? { ...m, content: m.content || "Sorry, I encountered an error. Please try again.", streaming: false } : m));
+        setMessages(prev => prev.map(m => m.id === streamId as any ? { ...m, content: m.content || "Sorry, I encountered an error. Please try again.", streaming: false } : m));
       }
     } finally {
-      void placeholderIdx;
       streamAbortRef.current = null;
     }
   };
@@ -758,20 +991,23 @@ export default function App() {
     const userCreatedAt = new Date().toISOString();
     setMessages(prev => [...prev, { role: 'user', content: userMessage, created_at: userCreatedAt }]);
     setIsLoading(true);
+    setIsRegenerating(false);
 
     // Auto-scroll instantly when user sends message
     isAutoScrollingRef.current = true;
     setShowScrollButton(false);
-    (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
-    setTimeout(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 50);
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+    setTimeout(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'auto' }); }, 50);
 
     await consumeStream(selectedSession.id, { query: userMessage }, 'chat/stream');
 
     setIsLoading(false);
     isAutoScrollingRef.current = true;
     setShowScrollButton(false);
-    (isAutoScrollingRef as any).timeout = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
-    setTimeout(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 50);
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => { isAutoScrollingRef.current = false; }, 1000);
+    setTimeout(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'auto' }); }, 50);
   };
 
   // -------- Feedback --------
@@ -792,23 +1028,16 @@ export default function App() {
   const handleRegenerate = async () => {
     if (!selectedSession || isLoading) return;
     setIsLoading(true);
+    setIsRegenerating(true);
     setMessages(prev => {
       const copy = [...prev];
       while (copy.length && copy[copy.length - 1].role === 'assistant') copy.pop();
       return copy;
     });
-    try {
-      const res = await fetch(`/api/sessions/${selectedSession.id}/regenerate`, { method: 'POST' });
-      if (!res.ok) throw new Error('Regenerate failed');
-      const data = await res.json();
-      setMessages(prev => [...prev, { id: data.id, role: 'assistant', content: data.reply, citations: data.citations, created_at: data.created_at }]);
-      if (selectedAssistant) fetchSessions(selectedAssistant.id);
-    } catch (e) {
-      console.error(e);
-      showToast('error', 'Regeneration Failed', 'Unable to regenerate the response.');
-    } finally {
-      setIsLoading(false);
-    }
+
+    await consumeStream(selectedSession.id, {}, 'regenerate');
+    setIsLoading(false);
+    setIsRegenerating(false);
   };
 
   // -------- Rename session --------
@@ -855,10 +1084,59 @@ export default function App() {
       const res = await fetch(`/api/assistants/${assistant.id}/clone`, { method: 'POST' });
       if (!res.ok) throw new Error();
       await fetchAssistants();
-      showToast('success', 'Assistant Cloned', `Created a copy of ${assistant.name}.`);
+      showToast('success', t('toast.assistant.cloned'), t('toast.assistant.cloned.msg', { name: assistant.name }));
     } catch (e) {
       console.error(e);
-      showToast('error', 'Clone Failed', 'Unable to clone the assistant.');
+      showToast('error', t('toast.err.clone'), t('toast.err.clone.msg'));
+    }
+  };
+
+  // -------- Export / Import assistant --------
+  const handleExportAssistant = async (assistant: Assistant) => {
+    setAssistantMenuOpen(null);
+    try {
+      const res = await fetch(`/api/assistants/${assistant.id}/export`);
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      a.download = match ? match[1] : `assistant_${assistant.name}.zip`;
+      a.href = url;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      showToast('error', t('toast.export.failed'), t('toast.export.failed.msg'));
+    }
+  };
+
+  const handleImportAssistant = async (file: File) => {
+    setIsImporting(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('/api/assistants/import', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(err.detail || 'Import failed');
+      }
+      const data = await res.json();
+      await fetchAssistants(); fetchStats(); fetchRecentSessions();
+      if (data.import_warnings?.length) {
+        showToast('info', t('toast.import.warn'), t('toast.import.warn.msg', { name: data.name }));
+      } else {
+        showToast('success', t('toast.import.success'), t('toast.import.success.msg', { name: data.name }));
+      }
+    } catch (e: any) {
+      console.error(e);
+      showToast('error', t('toast.import.failed'), e.message || t('toast.import.failed.msg'));
+    } finally {
+      setIsImporting(false);
+      if (importInputRef.current) importInputRef.current.value = '';
     }
   };
 
@@ -875,10 +1153,10 @@ export default function App() {
       const newSession = await res.json();
       await fetchSessions(selectedAssistant.id);
       setSelectedSession(newSession);
-      showToast('success', 'Conversation Branched', 'Forked into a new chat.');
+      showToast('success', t('toast.branch.success'), t('toast.branch.success.msg'));
     } catch (e) {
       console.error(e);
-      showToast('error', 'Branch Failed', 'Unable to branch the conversation.');
+      showToast('error', t('toast.branch.failed'), t('toast.branch.failed.msg'));
     }
   };
 
@@ -974,18 +1252,40 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
 <script>window.onload=()=>{window.print();}</script>
 </body></html>`;
     const win = window.open('', '_blank');
-    if (!win) { showToast('error', 'Export Failed', 'Pop-ups are blocked.'); return; }
+    if (!win) { showToast('error', t('toast.export.blocked'), t('toast.export.blocked.msg')); return; }
     win.document.open(); win.document.write(html); win.document.close();
   };
 
   // -------- Citation drill-down --------
-  const handleCitationClick = (filename: string) => {
+  const handleCitationClick = (filename: string, messageContext?: string[]) => {
     const doc = documents.find(d => d.filename === filename);
     if (!doc) {
-      showToast('info', 'Document Unavailable', `${filename} is no longer in the knowledge base.`);
+      showToast('info', t('toast.citation.unavailable'), t('toast.citation.unavailable.msg', { filename }));
       return;
     }
-    handlePreviewDocument({ id: doc.id, filename: doc.filename });
+    const baseName = filename.split('#')[0].toLowerCase();
+
+    // Find ALL context blocks that match this filename
+    const matchingContexts = messageContext?.filter((c: string) => {
+      const normalizedC = c.trim().toLowerCase();
+      return normalizedC.startsWith(`[${baseName}]`) || normalizedC.startsWith(`[${baseName}#`);
+    }) || [];
+
+    if (matchingContexts.length > 0) {
+      const snippets = matchingContexts.map(c => {
+        const parts = c.split(/\]:\s?|:\s?/);
+        return parts.length > 1 ? parts.slice(1).join(']: ').trim() : '';
+      }).filter(Boolean);
+
+      if (snippets.length > 0) {
+        // Pass the joined snippets to be highlighted in the full document
+        handlePreviewDocument({ id: doc.id, filename: doc.filename }, snippets.join('\n\n---\n\n'));
+      } else {
+        handlePreviewDocument({ id: doc.id, filename: doc.filename });
+      }
+    } else {
+      handlePreviewDocument({ id: doc.id, filename: doc.filename });
+    }
   };
 
   // ---- Helpers ----
@@ -1024,23 +1324,25 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
   return (
     <div className="flex h-screen w-full bg-slate-50 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-white">
 
-      {/* Mobile Nav - only when assistant selected */}
-      {selectedAssistant && (
-        <div className="md:hidden absolute top-4 left-4 z-50">
-          <button onClick={() => setSidebarOpen(true)} className="p-2 bg-white dark:bg-slate-900 rounded-md shadow text-slate-600 dark:text-slate-400">
-            <Menu size={20} />
-          </button>
-        </div>
-      )}
+      {/* Mobile Nav Trigger (moved inside header) */}
+
+      {/* Hidden import file input */}
+      <input
+        type="file"
+        ref={importInputRef}
+        accept=".zip"
+        className="hidden"
+        onChange={e => { if (e.target.files?.[0]) handleImportAssistant(e.target.files[0]); }}
+      />
 
       {sidebarOpen && <div className="fixed inset-0 bg-black/20 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />}
 
       {/* Global Sidebar (Assistants) - hidden on homepage */}
       {selectedAssistant && (
         <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-          <div className="h-[76px] px-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between shrink-0">
+          <div className="h-[64px] md:h-[76px] px-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
             <button onClick={() => { setSelectedAssistant(null); setSidebarOpen(false); }} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <Library className="text-indigo-400" size={24} />
+              <Library className="text-primary-400" size={24} />
               <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
             </button>
             <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
@@ -1049,16 +1351,16 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
           <div className="p-4">
             <button
               onClick={() => setShowAddModal(true)}
-              className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors text-sm"
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg font-medium transition-colors text-sm"
             >
-              <Plus size={16} /> New Assistant
+              <Plus size={16} /> {t('nav.newAssistant')}
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
-            <div className="px-3 pt-2 pb-1 text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Your Assistants</div>
+            <div className="px-3 pt-2 pb-1 text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">{t('nav.yourAssistants')}</div>
             {assistants.length === 0 ? (
-              <div className="px-3 py-4 text-sm text-slate-600 dark:text-slate-400 italic text-center">No assistants created yet.</div>
+              <div className="px-3 py-4 text-sm text-slate-600 dark:text-slate-400 italic text-center">{t('nav.noAssistants')}</div>
             ) : (
               assistants.map(a => (
                 <div
@@ -1070,33 +1372,38 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   onDrop={(e) => { e.preventDefault(); handleAssistantDrop(a.id); }}
                   onDragEnd={() => { setDraggingAssistantId(null); setDragOverAssistantId(null); }}
                   onClick={() => setSelectedAssistant(a)}
-                  className={`w-full text-left px-2 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'} ${dragOverAssistantId === a.id && draggingAssistantId !== a.id ? 'ring-2 ring-indigo-400 dark:ring-indigo-500' : ''} ${draggingAssistantId === a.id ? 'opacity-50' : ''}`}
+                  className={`w-full text-left px-2 py-3 rounded-lg flex items-center justify-between cursor-pointer group transition-colors ${selectedAssistant?.id === a.id ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'} ${dragOverAssistantId === a.id && draggingAssistantId !== a.id ? 'ring-2 ring-primary-400 dark:ring-primary-500' : ''} ${draggingAssistantId === a.id ? 'opacity-50' : ''}`}
                 >
                   <div className="flex items-center gap-2 overflow-hidden flex-1">
-                    <span className="text-slate-400 dark:text-slate-600 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity" title="Drag to reorder">
+                    <span className="text-slate-400 dark:text-slate-600 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity" title={t('nav.dragHint')}>
                       <GripVertical size={14} />
                     </span>
                     {a.image_url ? (
                       <img src={a.image_url} alt={a.name} className="w-7 h-7 rounded-lg object-cover shrink-0" />
                     ) : (
-                      <Bot size={18} className={selectedAssistant?.id === a.id ? "text-indigo-600 dark:text-indigo-400" : "text-slate-600 dark:text-slate-400 group-hover:text-indigo-500"} />
+                      <Bot size={18} className={selectedAssistant?.id === a.id ? "text-primary-600 dark:text-primary-400" : "text-slate-600 dark:text-slate-400 group-hover:text-primary-500"} />
                     )}
                     <div className="truncate flex items-center gap-1.5 min-w-0">
                       <span className="text-sm font-medium truncate">{a.name}</span>
-                      {!!a.pinned && <Pin size={11} className="text-amber-500 shrink-0 fill-amber-500" />}
                     </div>
                   </div>
-                  <div className="flex gap-1 items-center shrink-0">
-                    <div className="relative">
-                      <button onClick={(e) => { e.stopPropagation(); setAssistantMenuOpen(assistantMenuOpen === a.id ? null : a.id); }} className="p-1 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-700 rounded transition-all opacity-0 group-hover:opacity-100">
+                  <div className="flex gap-1 items-center shrink-0 assistant-menu-container">
+                    <div className="relative flex items-center justify-end min-w-[28px] h-8">
+                      {!!a.pinned && (
+                        <div className="absolute right-1 p-1 text-slate-400 transition-all duration-300 transform group-hover:-translate-x-6">
+                          <Pin size={12} className="fill-slate-400" />
+                        </div>
+                      )}
+                      <button onClick={(e) => { e.stopPropagation(); setAssistantMenuOpen(assistantMenuOpen === a.id ? null : a.id); }} className="relative z-10 p-1 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-700 rounded transition-all opacity-0 group-hover:opacity-100">
                         <MoreHorizontal size={14} />
                       </button>
                       {assistantMenuOpen === a.id && (
                         <div className="absolute right-0 top-full mt-1 z-50 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 text-sm">
-                          <button onClick={(e) => { e.stopPropagation(); handleEditAssistantClick(a, e); setAssistantMenuOpen(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Edit2 size={14}/> Edit</button>
-                          <button onClick={(e) => { e.stopPropagation(); handleTogglePin(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Pin size={14}/> {a.pinned ? 'Unpin' : 'Pin'}</button>
-                          <button onClick={(e) => { e.stopPropagation(); handleCloneAssistant(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Copy size={14}/> Clone</button>
-                          <button onClick={(e) => { e.stopPropagation(); setAssistantMenuOpen(null); handleDeleteAssistant(a, e); }} className="w-full text-left px-3 py-2 hover:bg-red-50 dark:hover:bg-red-500/10 text-red-600 dark:text-red-400 flex items-center gap-2"><Trash2 size={14}/> Delete</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleEditAssistantClick(a, e); setAssistantMenuOpen(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Edit2 size={14} /> {t('nav.menu.edit')}</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleTogglePin(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Pin size={14} /> {a.pinned ? t('nav.menu.unpin') : t('nav.menu.pin')}</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleCloneAssistant(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Copy size={14} /> {t('nav.menu.clone')}</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleExportAssistant(a); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><Download size={14} /> {t('nav.menu.export')}</button>
+                          <button onClick={(e) => { e.stopPropagation(); setAssistantMenuOpen(null); handleDeleteAssistant(a, e); }} className="w-full text-left px-3 py-2 hover:bg-red-50 dark:hover:bg-red-500/10 text-red-600 dark:text-red-400 flex items-center gap-2"><Trash2 size={14} /> {t('nav.menu.delete')}</button>
                         </div>
                       )}
                     </div>
@@ -1106,10 +1413,13 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
             )}
           </div>
 
-          <div className="p-4 border-t border-slate-200 dark:border-slate-800 shrink-0">
+          <div className="p-4 border-t border-slate-200 dark:border-slate-800 shrink-0 space-y-1">
             <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="w-full flex items-center justify-center gap-2 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors text-sm font-medium">
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-              {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+              {theme === 'dark' ? t('nav.theme.light') : t('nav.theme.dark')}
+            </button>
+            <button onClick={() => setLang(lang === 'en' ? 'es' : 'en')} className="w-full flex items-center justify-center gap-2 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-lg transition-colors text-sm font-medium">
+              <Globe size={16} /> {t('lang.toggle')}
             </button>
           </div>
         </aside>
@@ -1119,19 +1429,26 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
       <main className="flex-1 flex flex-col h-full bg-white dark:bg-slate-900 relative min-w-0">
         {selectedAssistant ? (
           <>
-            {/* Context Header */}
-            <header className="min-h-[76px] py-3 px-4 pl-14 md:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap sm:flex-nowrap items-center justify-between shadow-sm z-10 w-full shrink-0 gap-3">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
+            <header className="min-h-[64px] md:min-h-[76px] py-2 md:py-3 px-3 md:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-[80] w-full shrink-0 gap-2 md:gap-3">
+              <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 overflow-hidden">
+                <button onClick={() => setSidebarOpen(true)} className="md:hidden -ml-1 p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors focus:outline-none focus:ring-0">
+                  <Menu size={20} />
+                </button>
+
                 {selectedAssistant.image_url ? (
-                  <img src={selectedAssistant.image_url} alt={selectedAssistant.name} className="w-10 h-10 rounded-lg object-cover shrink-0" />
+                  <img src={selectedAssistant.image_url} alt={selectedAssistant.name} className="w-8 h-8 md:w-10 md:h-10 rounded-lg object-cover shrink-0 border border-slate-200 dark:border-slate-800" />
                 ) : (
-                  <div className="p-2 bg-indigo-900/30 text-indigo-400 rounded-lg shrink-0">
-                    <Bot size={24} />
+                  <div className="p-1.5 md:p-2 bg-primary-900/30 text-primary-400 rounded-lg shrink-0">
+                    <Bot size={18} className="md:w-6 md:h-6" />
                   </div>
                 )}
-                <div className="min-w-0">
-                  <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-200 leading-tight truncate">{selectedAssistant.name}</h2>
-                  <p className="text-xs text-slate-600 dark:text-slate-400 truncate">{selectedAssistant.description || "AI Assistant"}</p>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-[13px] md:text-lg font-bold text-slate-800 dark:text-slate-200 leading-tight truncate">{selectedAssistant.name}</h2>
+                  {selectedAssistant.description && (
+                    <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 truncate opacity-70 leading-none mt-0.5" title={selectedAssistant.description}>
+                      {selectedAssistant.description}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1140,47 +1457,49 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   <>
                     <button
                       onClick={() => { setChatSearchOpen(true); setTimeout(() => chatSearchInputRef.current?.focus(), 50); }}
-                      title="Search this chat (Ctrl+F)"
+                      title={t('header.search')}
                       className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
                     >
                       <Search size={16} />
                     </button>
-                    <div className="relative">
+                    <div className="relative export-menu-container">
                       <button
                         onClick={() => setShowExportMenu(o => !o)}
-                        title="Export conversation"
+                        title={t('header.export')}
                         className="p-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
                       >
                         <Download size={16} />
                       </button>
                       {showExportMenu && (
-                        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm">
-                          <button onClick={handleExportMarkdown} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><FileText size={14}/> Export as .md</button>
-                          <button onClick={handleExportPdf} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><FileText size={14}/> Export as .pdf</button>
+                        <div className="absolute right-0 mt-1 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-[100] text-sm">
+                          <button onClick={handleExportMarkdown} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><FileText size={14} /> {t('header.export.md')}</button>
+                          <button onClick={handleExportPdf} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-2"><FileText size={14} /> {t('header.export.pdf')}</button>
                         </div>
                       )}
                     </div>
                   </>
                 )}
-                <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
+                <div className="flex gap-0.5 md:gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 md:p-1 rounded-lg">
                   <button
                     onClick={() => setActiveTab('chat')}
-                    className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'chat' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    className={`px-2.5 md:px-4 py-1 md:py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'chat' ? 'bg-white dark:bg-slate-900 text-primary-600 dark:text-primary-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    title="Switch to Chat"
                   >
-                    <MessageSquare size={16} /> Chat
+                    <MessageSquare size={16} /> <span className="hidden md:inline">{t('header.tab.chat')}</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('docs')}
-                    className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'docs' ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    className={`px-2.5 md:px-4 py-1 md:py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2 ${activeTab === 'docs' ? 'bg-white dark:bg-slate-900 text-primary-600 dark:text-primary-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
+                    title="Switch to Documents"
                   >
-                    <BookOpen size={16} /> <span className="hidden sm:inline">Knowledge Base</span><span className="sm:hidden">Docs</span>
+                    <BookOpen size={16} /> <span className="hidden lg:inline">{t('header.tab.docs')}</span><span className="hidden md:inline lg:hidden">{t('header.tab.docs.short')}</span>
                   </button>
                 </div>
               </div>
             </header>
 
-            {/* TAB ROUTING */}
-            {activeTab === 'chat' ? (
+            {/* TAB ROUTING - Persistent visibility to preserve scroll state */}
+            <div className={`flex-1 flex overflow-hidden min-w-0 ${activeTab !== 'chat' ? 'hidden' : ''}`}>
               <div className="flex-1 flex overflow-hidden min-w-0">
                 {/* Left Drawer: Sessions */}
                 <div className={`w-full md:w-64 border-r border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 flex flex-col transition-all duration-300 ${selectedSession ? 'hidden md:flex' : 'flex'} ${!showChatsPane ? 'md:hidden' : ''}`}>
@@ -1189,16 +1508,24 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                       onClick={handleCreateSession}
                       className="w-full flex items-center justify-center gap-2 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg font-medium transition-colors text-sm shadow-sm"
                     >
-                      <Plus size={16} /> New Chat
+                      <Plus size={16} /> {t('chat.newChat')}
                     </button>
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-1">
                     {sessions.map(s => (
                       <div
                         key={s.id}
-                        onClick={() => { if (renamingSessionId !== s.id) setSelectedSession(s); }}
-                        onDoubleClick={(e) => { e.stopPropagation(); startRenameSession(s); }}
-                        className={`w-full group px-3 py-2.5 rounded-md cursor-pointer transition-colors ${selectedSession?.id === s.id ? 'bg-indigo-50 dark:bg-indigo-900/30 font-medium' : 'hover:bg-slate-200 dark:hover:bg-slate-800'}`}
+                        onClick={() => {
+                          if (selectedSession?.id === s.id || renamingSessionId === s.id) return;
+                          setSelectedSession(s);
+                          setChatSearchResults([]);
+                          setChatSearchQuery('');
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          if (renamingSessionId !== s.id) startRenameSession(s);
+                        }}
+                        className={`w-full group px-3 py-2.5 rounded-md cursor-pointer transition-colors ${selectedSession?.id === s.id ? 'bg-primary-50 dark:bg-primary-900/30 font-medium' : 'hover:bg-slate-200 dark:hover:bg-slate-800'}`}
                       >
                         <div className="flex items-center justify-between">
                           {renamingSessionId === s.id ? (
@@ -1209,31 +1536,32 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                               onChange={(e) => setRenamingDraft(e.target.value)}
                               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitRenameSession(); } if (e.key === 'Escape') { setRenamingSessionId(null); } }}
                               onBlur={commitRenameSession}
-                              className="flex-1 text-sm bg-white dark:bg-slate-900 border border-indigo-400 dark:border-indigo-500 rounded px-2 py-0.5 outline-none text-slate-900 dark:text-white"
+                              className="flex-1 text-sm bg-white dark:bg-slate-900 border border-primary-400 dark:border-primary-500 rounded px-2 py-0.5 outline-none text-slate-900 dark:text-white"
                             />
                           ) : (
-                            <span className={`truncate pr-2 text-sm ${selectedSession?.id === s.id ? 'text-indigo-700 dark:text-indigo-300 font-semibold' : 'text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white'}`}>{s.title || "New Conversation"}</span>
+                            <span className={`truncate pr-2 text-sm ${selectedSession?.id === s.id ? 'text-primary-700 dark:text-primary-300 font-semibold' : 'text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white'}`}>{s.title || t('session.default')}</span>
                           )}
                           {renamingSessionId !== s.id && (
                             <div className="flex items-center gap-0.5 shrink-0">
                               <button
                                 onClick={(e) => { e.stopPropagation(); startRenameSession(s); }}
-                                className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:text-indigo-400 dark:hover:bg-indigo-500/10 rounded transition-all`}
-                                title="Rename"
+                                onDoubleClick={(e) => e.stopPropagation()}
+                                className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-primary-500 hover:bg-primary-50 dark:hover:text-primary-400 dark:hover:bg-primary-500/10 rounded transition-all`}
+                                title={t('session.rename')}
                               >
                                 <Edit2 size={13} />
                               </button>
                               <button
                                 onClick={(e) => handleDeleteSession(s, e)}
-                                className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all ${selectedSession?.id === s.id ? 'text-indigo-500 dark:text-indigo-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10' : ''}`}
-                                title="Delete Session"
+                                className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all ${selectedSession?.id === s.id ? 'text-primary-500 dark:text-primary-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10' : ''}`}
+                                title={t('session.delete')}
                               >
                                 <Trash2 size={14} />
                               </button>
                             </div>
                           )}
                         </div>
-                        <div className={`text-[10px] mt-0.5 ${selectedSession?.id === s.id ? 'text-indigo-400/70' : 'text-slate-500'}`}>
+                        <div className={`text-[10px] mt-0.5 ${selectedSession?.id === s.id ? 'text-primary-400/70' : 'text-slate-500'}`}>
                           {s.updated_at ? new Date(s.updated_at + 'Z').toLocaleDateString('en-US', { timeZone: 'Europe/Paris', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}
                         </div>
                       </div>
@@ -1253,36 +1581,48 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   {!selectedSession ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-slate-500 p-8 text-center">
                       <MessageSquare size={48} className="mb-4 text-slate-700 dark:text-gray-300" />
-                      <h3 className="text-lg font-medium text-slate-600 dark:text-slate-400 mb-2">No Active Chat</h3>
-                      <p className="text-sm max-w-sm">Select a chat session from the menu or start a new conversation with {selectedAssistant.name}.</p>
-                      <button onClick={handleCreateSession} className="mt-6 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 shadow-sm transition-colors">Start New Conversation</button>
+                      <h3 className="text-lg font-medium text-slate-600 dark:text-slate-400 mb-2">{t('chat.noSession.title')}</h3>
+                      <p className="text-sm max-w-sm">{t('chat.noSession.hint')}</p>
+                      <button onClick={handleCreateSession} className="mt-6 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-500 shadow-sm transition-colors">{t('chat.noSession.start')}</button>
                     </div>
                   ) : (
                     <>
                       {/* Mobile back button */}
-                      <div className="md:hidden border-b border-slate-200 dark:border-slate-800 bg-white/90 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm flex items-center px-4 py-2 shrink-0 z-10 sticky top-0">
-                        <button onClick={() => setSelectedSession(null)} className="flex items-center text-sm font-medium text-indigo-400 hover:text-indigo-300 py-1">
-                          <ChevronLeft size={18} className="mr-1" /> Back to Chats
+                      <div className="md:hidden border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm flex items-center px-4 py-2 shrink-0 z-10 sticky top-0">
+                        <button onClick={() => { setSelectedSession(null); setChatSearchResults([]); setChatSearchQuery(''); }} className="flex items-center text-sm font-medium text-primary-400 hover:text-primary-300 py-1">
+                          <ChevronLeft size={18} className="mr-1" /> {t('session.backToChats')}
                         </button>
                       </div>
 
-                      <div className="flex-1 overflow-y-auto p-4 md:p-8 w-full relative" onScroll={handleScroll}>
+                      <div ref={chatScrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 w-full relative" onScroll={handleScroll}>
                         <div className="max-w-3xl mx-auto space-y-8 pb-32">
                           {messages.length === 0 && (
                             <div className="flex flex-col items-center text-center mt-20 text-slate-500">
-                              <Bot size={40} className="mb-3 text-indigo-200" />
-                              <p>Start chatting with {selectedAssistant.name}! It only knows about its requested Knowledge Base.</p>
+                              <Bot size={40} className="mb-3 text-primary-200" />
+                              <p>{t('chat.empty')}</p>
                             </div>
                           )}
 
                           {messages.map((msg, index) => {
                             let cleanContent = msg.content;
                             if (msg.citations) {
+                              cleanContent = msg.content;
+                              // Strip specific citations [file.pdf#0] and base ones [file.pdf]
                               msg.citations.forEach(cite => {
-                                const escapedCite = cite.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                                const regex = new RegExp(`\\[${escapedCite}\\]`, 'g');
-                                cleanContent = cleanContent.replace(regex, '');
+                                const baseCite = cite.split('#')[0];
+                                const escapedFull = cite.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                const escapedBase = baseCite.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                cleanContent = cleanContent.replace(new RegExp(`\\s?\\[${escapedFull}\\]`, 'gi'), '');
+                                cleanContent = cleanContent.replace(new RegExp(`\\s?\\[${escapedBase}\\]`, 'gi'), '');
                               });
+                              // Catch-all for any remaining file-like citations to ensure clean UI
+                              cleanContent = cleanContent.replace(/\[[^\]]+\.(pdf|docx|txt|csv|md)(#[0-9]+)?\]/gi, '');
+                            } else if (msg.streaming) {
+                              // Aggressive real-time citation hiding
+                              // 1. Hide completed citations (including #ID)
+                              cleanContent = msg.content.replace(/\[[^\]]+(\.pdf|\.docx|\.txt|\.csv|\.md)(#[0-9]+)?\]/gi, '');
+                              // 2. Hide partial citations at the end of the text (e.g. "[file.pdf")
+                              cleanContent = cleanContent.replace(/\[[^\]]*$/g, '');
                             }
 
                             let showDateSeparator = false;
@@ -1303,42 +1643,56 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                                     <span className="text-[11px] font-medium text-slate-500 bg-slate-100 dark:bg-slate-800/60 px-3 py-1 rounded-full uppercase tracking-wider">{dateSeparatorText}</span>
                                   </div>
                                 )}
-                                <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div id={`message-${msg.id}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} scroll-mt-24 transition-all duration-500 rounded-2xl`}>
                                   <div className={`max-w-[95%] md:max-w-[85%] rounded-2xl px-4 md:px-5 py-3 md:py-4 min-w-0 overflow-x-auto ${msg.role === 'user'
-                                    ? 'bg-indigo-600 text-white rounded-br-none shadow-sm'
+                                    ? 'bg-primary-600 text-white rounded-br-none shadow-sm'
                                     : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none shadow-sm'
                                     }`}>
                                     {msg.role === 'user' ? (
                                       <div className="whitespace-pre-wrap leading-relaxed text-[15px] break-words">{cleanContent}</div>
                                     ) : (
-                                      <div className="text-[15px] leading-relaxed prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-indigo-600 dark:prose-code:text-indigo-300 break-words prose-pre:max-w-full">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                          {cleanContent}
-                                        </ReactMarkdown>
+                                      <div className="text-[15px] leading-relaxed prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-primary-600 dark:prose-code:text-primary-300 break-words prose-pre:max-w-full">
+                                        {msg.streaming && !cleanContent.trim() ? (
+                                          <div className="flex items-center space-x-2 text-slate-400 py-1">
+                                            <Loader2 size={16} className="animate-spin text-primary-500" />
+                                            <span className="text-sm inline-flex items-center">
+                                              {isRegenerating ? t('chat.regenerating') : 'Processing request'}
+                                              <span className="inline-block w-[10px] text-left ml-0.5">{loadingDots}</span>
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            {cleanContent}
+                                          </ReactMarkdown>
+                                        )}
                                       </div>
                                     )}
 
-                                    {msg.citations && msg.citations.length > 0 && (
+                                    {(msg.citations && msg.citations.length > 0) || (msg.streaming && cleanContent !== msg.content) ? (
                                       <div className="mt-4 pt-3 border-t border-slate-200/60 border-slate-200/60 dark:border-slate-800/60">
-                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Grounded Sources</span>
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">{t('chat.sources')}</span>
                                         <div className="flex flex-wrap gap-1.5">
-                                          {msg.citations.map((cite, i) => (
+                                          {msg.citations ? Array.from(new Set(msg.citations.map(c => c.split('#')[0]))).map((baseCite, i) => (
                                             <button
                                               key={i}
-                                              onClick={() => handleCitationClick(cite)}
-                                              title={`Open ${cite}`}
-                                              className="inline-flex items-center px-2 py-1 rounded bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-medium hover:border-indigo-400 dark:hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors"
+                                              onClick={() => handleCitationClick(baseCite, msg.context)}
+                                              title={`Open sources from ${baseCite}`}
+                                              className="inline-flex items-center px-2 py-1 rounded bg-white dark:bg-slate-900 shadow-sm border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 font-medium hover:border-primary-400 dark:hover:border-primary-500 hover:text-primary-600 dark:hover:text-primary-300 transition-colors"
                                             >
-                                              <FileText size={10} className="mr-1 text-indigo-400" />
-                                              {cite}
+                                              <FileText size={10} className="mr-1 text-primary-400" />
+                                              {baseCite}
                                             </button>
-                                          ))}
+                                          )) : (
+                                            <div className="flex items-center gap-2 text-[10px] text-slate-500 italic">
+                                              <Loader2 size={10} className="animate-spin" /> {t('chat.sources.hint')}
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
-                                    )}
+                                    ) : null}
 
                                     {msg.created_at && (
-                                      <div className={`text-[10px] mt-2 font-medium ${msg.role === 'user' ? 'text-indigo-200 text-right' : 'text-slate-400 dark:text-slate-500 text-left'}`}>
+                                      <div className={`text-[10px] mt-2 font-medium ${msg.role === 'user' ? 'text-primary-200 text-right' : 'text-slate-400 dark:text-slate-500 text-left'}`}>
                                         {formatTime(msg.created_at)}
                                       </div>
                                     )}
@@ -1348,22 +1702,22 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                                   <div className="flex items-center gap-1 -mt-3 ml-1 text-slate-400 dark:text-slate-500">
                                     <button
                                       onClick={() => handleFeedback(msg.id, 1)}
-                                      title="Helpful"
+                                      title={t('chat.action.helpful')}
                                       className={`p-1.5 rounded-md transition-colors ${msg.feedback === 1 ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10' : 'hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'}`}
                                     >
                                       <ThumbsUp size={13} />
                                     </button>
                                     <button
                                       onClick={() => handleFeedback(msg.id, -1)}
-                                      title="Not helpful"
+                                      title={t('chat.action.notHelpful')}
                                       className={`p-1.5 rounded-md transition-colors ${msg.feedback === -1 ? 'text-red-500 bg-red-50 dark:bg-red-500/10' : 'hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10'}`}
                                     >
                                       <ThumbsDown size={13} />
                                     </button>
                                     <button
                                       onClick={() => handleBranchFromMessage(msg.id)}
-                                      title="Branch conversation here"
-                                      className="p-1.5 rounded-md hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors"
+                                      title={t('chat.action.branch')}
+                                      className="p-1.5 rounded-md hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-500/10 transition-colors"
                                     >
                                       <GitBranch size={13} />
                                     </button>
@@ -1371,8 +1725,8 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                                       <button
                                         onClick={handleRegenerate}
                                         disabled={isLoading}
-                                        title="Regenerate"
-                                        className="p-1.5 rounded-md hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title={t('chat.action.regenerate')}
+                                        className="p-1.5 rounded-md hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                       >
                                         <RotateCcw size={13} />
                                       </button>
@@ -1383,11 +1737,11 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                             )
                           })}
 
-                          {isLoading && (
+                          {isLoading && !messages.some(m => m.streaming) && (
                             <div className="flex justify-start">
-                              <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl rounded-bl-none px-5 py-4 shadow-sm flex items-center space-x-2 text-indigo-1000">
-                                <Loader2 size={18} className="animate-spin" />
-                                <span className="text-sm font-medium">Querying Vector Space...</span>
+                              <div className="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl rounded-bl-none px-5 py-4 shadow-sm flex items-center space-x-2 text-primary-1000">
+                                <Loader2 size={18} className="animate-spin text-primary-500" />
+                                <span className="text-sm font-medium">{t('chat.loading')}</span>
                               </div>
                             </div>
                           )}
@@ -1403,28 +1757,28 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                             <div className="absolute -top-14 left-1/2 -translate-x-1/2 flex justify-center w-full z-20">
                               <button
                                 onClick={scrollToBottom}
-                                className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
+                                className="p-2 bg-primary-600 hover:bg-primary-500 text-white rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 flex items-center justify-center animate-in fade-in slide-in-from-bottom-2"
                               >
                                 <ArrowDown size={20} />
                               </button>
                             </div>
                           )}
-                          <form onSubmit={handleSend} className="relative flex items-end overflow-hidden rounded-2xl bg-white dark:bg-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.08)] border border-slate-200 dark:border-slate-800 focus-within:border-indigo-400 dark:focus-within:border-indigo-500/50 focus-within:ring-2 focus-within:ring-indigo-100 dark:focus-within:ring-indigo-500/20 transition-all min-w-0">
+                          <form onSubmit={handleSend} className="relative flex items-end overflow-hidden rounded-2xl bg-white dark:bg-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.08)] border border-slate-200 dark:border-slate-800 focus-within:border-primary-400 dark:focus-within:border-primary-500/50 focus-within:ring-2 focus-within:ring-primary-100 dark:focus-within:ring-primary-500/20 transition-all min-w-0">
                             <textarea
                               value={input}
                               onChange={(e) => setInput(e.target.value)}
                               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
-                              placeholder={`Ask ${selectedAssistant.name}...`}
+                              placeholder={t('chat.input.placeholder', { name: selectedAssistant.name })}
                               className="px-4 md:px-5 py-3 md:py-4 w-full bg-transparent border-0 focus:ring-0 resize-none max-h-48 outline-none text-slate-800 dark:text-slate-200 placeholder-slate-500 dark:placeholder-gray-400 text-[15px] min-w-0"
                               rows={input.split('\n').length > 1 ? Math.min(input.split('\n').length, 5) : 1}
                               style={{ minHeight: '56px' }}
                             />
-                            <button type="submit" disabled={!input.trim() || isLoading} className="absolute right-2 bottom-2 p-2.5 rounded-xl bg-indigo-600 text-white disabled:bg-slate-200 dark:disabled:bg-slate-200 dark:disabled:bg-slate-700 disabled:text-slate-500 hover:bg-indigo-500 transition-colors shadow-sm">
+                            <button type="submit" disabled={!input.trim() || isLoading} className="absolute right-2 bottom-2 p-2.5 rounded-xl bg-primary-600 text-white disabled:bg-slate-200 dark:disabled:bg-slate-200 dark:disabled:bg-slate-700 disabled:text-slate-500 hover:bg-primary-500 transition-colors shadow-sm">
                               <Send size={16} />
                             </button>
                           </form>
                           <div className="text-center mt-2">
-                            <span className="text-[11px] text-slate-500 font-medium tracking-wide">Assistant contextualizes strictly off uploaded files.</span>
+                            <span className="text-[11px] text-slate-500 font-medium tracking-wide">{t('chat.input.hint')}</span>
                           </div>
                         </div>
                       </div>
@@ -1432,157 +1786,344 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   )}
                 </div>
               </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto bg-slate-50/50 dark:bg-slate-950/50 p-6 md:p-12">
-                <div className="max-w-4xl mx-auto space-y-8">
+            </div>
 
-                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 md:p-8">
-                    <div className="flex items-center justify-between mb-6">
-                      <div>
-                        <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Knowledge Base</h3>
-                        <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">Upload files specifically for {selectedAssistant.name}. It will not see files from other assistants.</p>
-                      </div>
+            <div className={`flex-1 overflow-y-auto bg-slate-50/50 dark:bg-slate-950/50 p-6 md:p-12 ${activeTab !== 'docs' ? 'hidden' : ''}`}>
+              <div className="max-w-4xl mx-auto space-y-8">
 
-                      <input type="file" multiple className="hidden" ref={fileInputRef} onChange={handleUpload} accept=".pdf,.docx,.pptx,.txt,.csv,.md,.png,.jpg,.jpeg" />
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 md:p-8">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{t('docs.title')}</h3>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">{t('docs.hint')}</p>
                     </div>
 
-                    {/* Dedicated Dropzone */}
-                    <div
-                      className={`mb-8 flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-xl transition-colors cursor-pointer ${isDragging ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950/50 hover:border-indigo-500/50 hover:bg-indigo-50 dark:hover:bg-indigo-900/10'}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver}
-                      onDragLeave={handleDragLeave}
-                      onDrop={handleDrop}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-full mb-4">
-                        {uploading ? <Loader2 className="animate-spin text-indigo-400" size={24} /> : <Upload className="text-indigo-400" size={24} />}
-                      </div>
-                      <h4 className="text-base font-semibold text-slate-900 dark:text-white mb-1">
-                        {uploading ? 'Processing files...' : 'Click to upload or drag & drop'}
-                      </h4>
-                      <p className="text-sm text-slate-600 dark:text-slate-400 text-center max-w-sm">
-                        PDF, Word, TXT, CSV, MD, or Images (max 10MB each)
-                      </p>
-                    </div>
-
-                    {documents.length === 0 ? (
-                      <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950">
-                        <BookOpen className="mx-auto h-12 w-12 text-slate-700 dark:text-gray-300" />
-                        <h4 className="mt-4 text-sm font-medium text-slate-900 dark:text-white">No documents</h4>
-                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Get started by uploading PDFs, Word, or Text files to train this assistant.</p>
-                      </div>
-                    ) : (
-                      <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-                        <div className="bg-slate-100 dark:bg-slate-950 px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">
-                          <div className="flex-1">Filename</div>
-                          <div className="w-24 text-right">Actions</div>
-                        </div>
-                        <ul className="divide-y divide-slate-200 dark:divide-slate-800/80 bg-white dark:bg-slate-900">
-                          {documents.map(doc => (
-                            <li key={doc.id} className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                              <div className="flex items-center gap-3 overflow-hidden">
-                                <FileText size={16} className="text-indigo-500 shrink-0" />
-                                <button onClick={() => handlePreviewDocument(doc)} className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors text-left" title="Preview file">{doc.filename}</button>
-                              </div>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button onClick={() => handlePreviewDocument(doc)} className="p-1.5 text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 rounded-md transition-colors" title="Preview">
-                                  <Eye size={16} />
-                                </button>
-                                <button onClick={() => handleDeleteDocument(doc)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-md transition-colors" title="Delete">
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                    <input type="file" multiple className="hidden" ref={fileInputRef} onChange={handleUpload} accept=".pdf,.docx,.txt,.csv,.md" />
                   </div>
 
-                  <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 md:p-8">
-                    <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-                      <Settings size={20} className="text-slate-500" /> System Persona & Instructions
-                    </h3>
-                    <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap border border-slate-200/50 dark:border-slate-800/50 font-mono leading-relaxed">
-                      {selectedAssistant.instructions}
+                  {/* Dedicated Dropzone */}
+                  <div
+                    className={`mb-8 flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-xl transition-colors cursor-pointer ${isDragging ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-300 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950/50 hover:border-primary-500/50 hover:bg-primary-50 dark:hover:bg-primary-900/10'}`} onDragEnter={handleDragEnter} onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <div className="p-3 bg-slate-100 dark:bg-slate-800 rounded-full mb-4">
+                      {uploading ? <Loader2 className="animate-spin text-primary-400" size={24} /> : <Upload className="text-primary-400" size={24} />}
                     </div>
+                    <h4 className="text-base font-semibold text-slate-900 dark:text-white mb-1">
+                      {uploading ? t('docs.upload.processing') : t('docs.upload.cta')}
+                    </h4>
+                    <p className="text-sm text-slate-600 dark:text-slate-400 text-center max-w-sm">
+                      {t('docs.upload.formats')}
+                    </p>
                   </div>
 
+                  {documents.length === 0 ? (
+                    <div className="text-center py-12 px-4 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950">
+                      <BookOpen className="mx-auto h-12 w-12 text-slate-700 dark:text-gray-300" />
+                      <h4 className="mt-4 text-sm font-medium text-slate-900 dark:text-white">{t('docs.empty.title')}</h4>
+                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{t('docs.empty.hint')}</p>
+                    </div>
+                  ) : (
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                      <div className="bg-slate-100 dark:bg-slate-950 px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex text-xs font-semibold text-slate-600 dark:text-slate-400 uppercase">
+                        <div className="flex-1">{t('docs.col.filename')}</div>
+                        <div className="w-24 text-right">{t('docs.col.actions')}</div>
+                      </div>
+                      <ul className="divide-y divide-slate-200 dark:divide-slate-800/80 bg-white dark:bg-slate-900">
+                        {documents.map(doc => (
+                          <li key={doc.id} className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                              <FileText size={16} className="text-primary-500 shrink-0" />
+                              <button onClick={() => handlePreviewDocument(doc)} className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate hover:text-primary-600 dark:hover:text-primary-400 transition-colors text-left" title={t('docs.action.preview')}>{doc.filename}</button>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={() => handlePreviewDocument(doc)} className="p-1.5 text-slate-400 hover:text-primary-500 hover:bg-primary-500/10 rounded-md transition-colors" title={t('docs.action.preview')}>
+                                <Eye size={16} />
+                              </button>
+                              <button onClick={() => handleDeleteDocument(doc)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-md transition-colors" title={t('docs.action.delete')}>
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
+
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 md:p-8">
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+                    <Settings size={20} className="text-slate-500" /> {t('docs.system')}
+                  </h3>
+                  <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap border border-slate-200/50 dark:border-slate-800/50 font-mono leading-relaxed">
+                    {selectedAssistant.instructions}
+                  </div>
+                </div>
+
               </div>
-            )}
+            </div>
           </>
         ) : (
-          <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950">
+          <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 flex flex-col">
             {/* Homepage Top Bar */}
             <div className="h-[76px] px-5 md:px-8 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
-                <Library className="text-indigo-400" size={24} />
+                <Library className="text-primary-400" size={24} />
                 <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
               </div>
-              <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}>
-                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="hidden sm:flex items-center gap-0.5 mr-1">
+                  <button
+                    onClick={() => setShowImportInfo(true)}
+                    className="p-1.5 text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-500/10 rounded-full transition-all"
+                    title="Required Structure Info"
+                  >
+                    <Info size={16} />
+                  </button>
+                  <button
+                    onClick={() => importInputRef.current?.click()}
+                    disabled={isImporting}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50"
+                    title={t('nav.import.hint')}
+                  >
+                    {isImporting ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+                    {t('nav.import')}
+                  </button>
+                </div>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-primary-600 text-white hover:bg-primary-500 rounded-lg transition-colors"
+                >
+                  <Plus size={15} /> {t('nav.newAssistant')}
+                </button>
+                <button onClick={() => setLang(lang === 'en' ? 'es' : 'en')} className="p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title={t('lang.toggle')}>
+                  <Globe size={18} />
+                </button>
+                <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title={theme === 'dark' ? t('nav.theme.light') : t('nav.theme.dark')}>
+                  {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                </button>
+              </div>
             </div>
 
             {/* Homepage Content */}
-            <div className="max-w-5xl mx-auto px-4 md:px-8 py-12 md:py-16">
+            <div className="flex-1 max-w-6xl w-full mx-auto px-4 md:px-8 py-8 md:py-10">
 
-              {/* Hero Section */}
-              <div className="text-center mb-12 md:mb-16">
-                <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 rounded-2xl border border-indigo-200 dark:border-indigo-500/20 shadow-[0_0_30px_rgba(99,102,241,0.1)] dark:shadow-[0_0_30px_rgba(99,102,241,0.15)] flex items-center justify-center mx-auto mb-6">
-                  <Library className="text-indigo-600 dark:text-indigo-400" size={32} />
-                </div>
-                <h2 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-white mb-3 tracking-tight">Welcome to Lincite</h2>
-                <p className="text-slate-500 dark:text-slate-400 max-w-lg mx-auto text-base md:text-lg leading-relaxed">Build specialized AI assistants with isolated knowledge bases. Upload documents and chat with precision-tuned models.</p>
+              {/* Hero */}
+              <div className="mb-8">
+                <h2 className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white mb-2 tracking-tight">{t('home.hero.title')}</h2>
+                <p className="text-slate-500 dark:text-slate-400 text-sm md:text-base">{t('home.hero.subtitle')}</p>
               </div>
 
-              {/* Assistants Grid */}
-              {assistants.length > 0 ? (
-                <>
-                  <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Your Assistants</h3>
-                    <button onClick={() => setShowAddModal(true)} className="flex items-center gap-1.5 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-colors">
-                      <Plus size={16} /> New Assistant
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {assistants.map(a => (
-                      <button
-                        key={a.id}
-                        onClick={() => setSelectedAssistant(a)}
-                        className="group relative text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 hover:border-indigo-300 dark:hover:border-indigo-500/40 hover:shadow-lg hover:shadow-indigo-500/5 dark:hover:shadow-indigo-500/10 transition-all duration-200 cursor-pointer"
-                      >
-                        <div className="flex items-start justify-between mb-3">
-                          {a.image_url ? (
-                            <img src={a.image_url} alt={a.name} className="w-14 h-14 rounded-xl object-cover shrink-0 group-hover:shadow-md transition-shadow" />
-                          ) : (
-                            <div className="p-2.5 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl text-indigo-600 dark:text-indigo-400 group-hover:bg-indigo-100 dark:group-hover:bg-indigo-900/50 transition-colors">
-                              <Bot size={22} />
-                            </div>
-                          )}
-                          <ArrowRight size={18} className="text-slate-300 dark:text-slate-600 group-hover:text-indigo-500 dark:group-hover:text-indigo-400 group-hover:translate-x-1 transition-all mt-1" />
-                        </div>
-                        <h4 className="text-base font-semibold text-slate-900 dark:text-white mb-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{a.name}</h4>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed">{a.description || 'No description provided'}</p>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="text-center py-16">
-                  <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-10 md:p-14 max-w-lg mx-auto">
-                    <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl flex items-center justify-center mx-auto mb-5">
-                      <Zap className="text-indigo-600 dark:text-indigo-400" size={28} />
+              {/* Stats Strip */}
+              {stats && (
+                <div className="grid grid-cols-3 gap-3 mb-8">
+                  {[
+                    { label: t('home.stats.assistants'), value: stats.assistants, icon: <Bot size={18} className="text-primary-500" /> },
+                    { label: t('home.stats.documents'), value: stats.documents, icon: <FileText size={18} className="text-emerald-500" /> },
+                    { label: t('home.stats.conversations'), value: stats.sessions, icon: <MessageSquare size={18} className="text-violet-500" /> },
+                  ].map(s => (
+                    <div key={s.label} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 flex items-center gap-3">
+                      <div className="p-2 bg-slate-50 dark:bg-slate-800 rounded-lg shrink-0">{s.icon}</div>
+                      <div className="min-w-0">
+                        <p className="text-xl font-bold text-slate-900 dark:text-white leading-none">{s.value}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">{s.label}</p>
+                      </div>
                     </div>
-                    <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Create Your First Assistant</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 max-w-sm mx-auto">Get started by creating an AI assistant with custom instructions and its own isolated knowledge base.</p>
-                    <button onClick={() => setShowAddModal(true)} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-medium shadow-md hover:bg-indigo-500 transition-all inline-flex items-center gap-2">
-                      <Plus size={20} /> Create Assistant
-                    </button>
+                  ))}
+                </div>
+              )}
+
+              {assistants.length > 0 ? (
+                <div className="flex flex-col lg:flex-row gap-8">
+                  {/* Left: Assistants grid */}
+                  <div className="flex-1 min-w-0">
+                    {/* Search + sort toolbar */}
+                    <div className="flex items-center gap-2 mb-5">
+                      <div className="relative flex-1">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={homeSearch}
+                          onChange={e => setHomeSearch(e.target.value)}
+                          placeholder={t('home.search.placeholder')}
+                          className="w-full pl-8 pr-3 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500 text-slate-900 dark:text-white placeholder-slate-400"
+                        />
+                      </div>
+                      <div className="relative">
+                        <select
+                          value={homeSort}
+                          onChange={e => setHomeSort(e.target.value as typeof homeSort)}
+                          className="appearance-none text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl pl-3 pr-9 py-2 text-slate-700 dark:text-slate-300 outline-none focus:ring-2 focus:ring-primary-500/40 cursor-pointer"
+                        >
+                          <option value="default">{t('home.sort.default')}</option>
+                          <option value="alpha">{t('home.sort.alpha')}</option>
+                          <option value="recent">{t('home.sort.recent')}</option>
+                        </select>
+                        <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    {/* Grid */}
+                    {(() => {
+                      let filtered = assistants.filter(a =>
+                        !homeSearch || a.name.toLowerCase().includes(homeSearch.toLowerCase()) || (a.description || '').toLowerCase().includes(homeSearch.toLowerCase())
+                      );
+                      if (homeSort === 'alpha') filtered = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+                      else if (homeSort === 'recent') filtered = [...filtered].sort((a, b) => (b.sort_order ?? 0) - (a.sort_order ?? 0));
+                      if (filtered.length === 0) return (
+                        <p className="text-sm text-slate-400 text-center py-10">{t('home.search.noResults', { q: homeSearch })}</p>
+                      );
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          {filtered.map(a => (
+                            <button
+                              key={a.id}
+                              onClick={() => setSelectedAssistant(a)}
+                              className="group relative text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 hover:border-primary-300 dark:hover:border-primary-500/40 hover:shadow-lg hover:shadow-primary-500/5 dark:hover:shadow-primary-500/10 transition-all duration-200 cursor-pointer"
+                            >
+                              <div className="flex items-start justify-between mb-3">
+                                {a.image_url ? (
+                                  <img src={a.image_url} alt={a.name} className="w-12 h-12 rounded-xl object-cover shrink-0 group-hover:shadow-md transition-shadow" />
+                                ) : (
+                                  <div className="p-2.5 bg-primary-50 dark:bg-primary-900/30 rounded-xl text-primary-600 dark:text-primary-400 group-hover:bg-primary-100 dark:group-hover:bg-primary-900/50 transition-colors">
+                                    <Bot size={20} />
+                                  </div>
+                                )}
+                              </div>
+                              <h4 className="text-sm font-semibold text-slate-900 dark:text-white mb-1 group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors truncate">{a.name}</h4>
+                              <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed">{a.description || t('home.assistant.noDescription')}</p>
+                              {!!a.pinned && <span className="absolute top-3 right-3 text-amber-400"><Pin size={12} className="fill-amber-400" /></span>}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Right rail: Recent activity */}
+                  <div className="lg:w-72 shrink-0 space-y-4">
+                    {/* Recent conversations */}
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+                      <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        {t('home.recent.title')}
+                      </h3>
+                      {recentSessions.length === 0 ? (
+                        <p className="text-xs text-slate-400 text-center py-3">{t('home.recent.empty')}</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {recentSessions.map(s => {
+                            const asst = assistants.find(a => a.id === s.assistant_id);
+                            return (
+                              <li key={s.id}>
+                                <button
+                                  onClick={() => {
+                                    if (asst) {
+                                      setSelectedAssistant(asst);
+                                      setTimeout(() => setSelectedSession({ id: s.id, title: s.title, assistant_id: s.assistant_id, updated_at: s.updated_at || '' }), 100);
+                                    }
+                                  }}
+                                  className="w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group"
+                                >
+                                  {s.assistant_image_url ? (
+                                    <img src={s.assistant_image_url} alt={s.assistant_name} className="w-7 h-7 rounded-lg object-cover shrink-0" />
+                                  ) : (
+                                    <div className="w-7 h-7 rounded-lg bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center shrink-0">
+                                      <Bot size={14} className="text-primary-500" />
+                                    </div>
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-medium text-slate-700 dark:text-slate-300 truncate group-hover:text-primary-600 dark:group-hover:text-primary-400">{s.title}</p>
+                                    <p className="text-[11px] text-slate-400 truncate">{s.assistant_name}</p>
+                                  </div>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+
+                    {/* Quick actions */}
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+                      <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                        {t('home.quickActions')}
+                      </h3>
+                      <div className="space-y-2">
+                        <button onClick={() => setShowAddModal(true)} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-colors text-left">
+                          <Plus size={15} className="text-primary-500" /> {t('home.quickActions.new')}
+                        </button>
+                        <button onClick={() => importInputRef.current?.click()} disabled={isImporting} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-colors text-left disabled:opacity-50">
+                          {isImporting ? <Loader2 size={15} className="animate-spin text-slate-400" /> : <Download size={15} className="text-slate-400" />} {t('home.quickActions.import')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Empty state */
+                <div className="flex flex-col lg:flex-row gap-8 items-start">
+                  <div className="flex-1">
+                    <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8 md:p-12 text-center mb-6">
+                      <div className="w-14 h-14 bg-primary-50 dark:bg-primary-900/30 rounded-xl flex items-center justify-center mx-auto mb-5">
+                        <Zap className="text-primary-600 dark:text-primary-400" size={28} />
+                      </div>
+                      <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">{t('home.empty.title')}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 max-w-sm mx-auto">{t('home.empty.subtitle')}</p>
+                      <div className="flex items-center justify-center gap-3 flex-wrap">
+                        <button onClick={() => setShowAddModal(true)} className="px-6 py-3 bg-primary-600 text-white rounded-xl font-medium shadow-md hover:bg-primary-500 transition-all inline-flex items-center gap-2">
+                          <Plus size={18} /> {t('home.empty.create')}
+                        </button>
+                        <button onClick={() => importInputRef.current?.click()} disabled={isImporting} className="px-6 py-3 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded-xl font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-all inline-flex items-center gap-2 disabled:opacity-50">
+                          {isImporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} {t('home.empty.import')}
+                        </button>
+                      </div>
+                    </div>
+                    {/* Template starter cards */}
+                    <div>
+                      <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">{t('home.templates.title')}</h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {INSTRUCTION_TEMPLATES.slice(0, 4).map((t, i) => (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              setNewAsstConfig({ name: '', description: '', instructions: t.instructions });
+                              setShowAddModal(true);
+                              setWizardStep(0);
+                            }}
+                            className="text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3.5 hover:border-primary-300 dark:hover:border-primary-500/40 hover:shadow-md transition-all group"
+                          >
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 group-hover:text-primary-600 dark:group-hover:text-primary-400 mb-1">{t.label}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{t.description}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Quick actions panel */}
+                  <div className="lg:w-64 shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
+                    <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <Zap size={14} /> {t('home.getStarted')}
+                    </h3>
+                    <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+                      <li className="flex items-start gap-2"><CheckCircle2 size={15} className="text-emerald-500 shrink-0 mt-0.5" /> {t('home.getStarted.1')}</li>
+                      <li className="flex items-start gap-2"><CheckCircle2 size={15} className="text-emerald-500 shrink-0 mt-0.5" /> {t('home.getStarted.2')}</li>
+                      <li className="flex items-start gap-2"><CheckCircle2 size={15} className="text-emerald-500 shrink-0 mt-0.5" /> {t('home.getStarted.3')}</li>
+                      <li className="flex items-start gap-2"><CheckCircle2 size={15} className="text-emerald-500 shrink-0 mt-0.5" /> {t('home.getStarted.4')}</li>
+                    </ul>
                   </div>
                 </div>
               )}
 
+            </div>
+
+            <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-5 md:px-8 py-3 flex items-center justify-between text-xs text-slate-400 shrink-0">
+              <span>{t('home.footer.version')}</span>
+              <a href="https://github.com/lucianciusa/rag-document-chat-assistant" target="_blank" rel="noopener noreferrer" className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-all flex items-center gap-1.5" title="View Source on GitHub">
+                <Github size={16} />
+              </a>
             </div>
           </div>
         )}
@@ -1593,7 +2134,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-lg shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Edit Assistant</h2>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{t('edit.title')}</h2>
               <button onClick={() => {
                 if (generatingAssistantId === editAsstConfig?.id) {
                   setShowCancelAvatarModal(true);
@@ -1602,10 +2143,10 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 }
               }} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:bg-slate-800"><X size={20} /></button>
             </div>
-            <form onSubmit={handleUpdateAssistant} className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+            <form onSubmit={handleUpdateAssistant} className="p-6 space-y-5 pb-12 max-h-[70vh] overflow-y-auto">
               {/* Avatar Section */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Avatar</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{t('edit.avatar')}</label>
                 <div className="flex items-center gap-4">
                   <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
                     {editAsstImage ? (
@@ -1620,10 +2161,10 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     <div className="flex gap-2">
                       <input type="file" ref={editAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) { deleteTempAvatar(editAsstImage); setEditAsstImage(e.target.files[0]); setRemoveEditImage(false); } }} />
                       <button type="button" onClick={() => editAvatarInputRef.current?.click()} className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1.5">
-                        <ImageIcon size={14} /> Upload
+                        <ImageIcon size={14} /> {t('edit.avatar.upload')}
                       </button>
-                      <button type="button" onClick={() => handleGenerateAvatar(editAsstConfig.id)} disabled={generatingAssistantId !== null} className={`px-3 py-1.5 text-xs font-medium bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg transition-colors flex items-center gap-1.5 ${generatingAssistantId !== null ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-100 dark:hover:bg-indigo-900/50'}`}>
-                        {generatingAssistantId === editAsstConfig.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Generate
+                      <button type="button" onClick={() => handleGenerateAvatar(editAsstConfig.id)} disabled={generatingAssistantId !== null} className={`px-3 py-1.5 text-xs font-medium bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 rounded-lg transition-colors flex items-center gap-1.5 ${generatingAssistantId !== null ? 'opacity-50 cursor-not-allowed' : 'hover:bg-primary-100 dark:hover:bg-primary-900/50'}`}>
+                        {generatingAssistantId === editAsstConfig.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {t('edit.avatar.generate')}
                       </button>
                       {generatingAssistantId === editAsstConfig.id && (
                         <div className="flex items-center gap-2 ml-1">
@@ -1636,43 +2177,70 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     </div>
                     {(editAsstConfig.image_url || editAsstImage) && !removeEditImage && (
                       <button type="button" onClick={() => { deleteTempAvatar(editAsstImage); setRemoveEditImage(true); setEditAsstImage(null); }} className="text-xs text-red-500 hover:text-red-600 dark:hover:text-red-400 transition-colors text-left">
-                        Remove image
+                        {t('edit.avatar.remove')}
                       </button>
                     )}
                   </div>
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span className="text-red-500">*</span></label>
-                <input required type="text" value={editAsstConfig.name} onChange={e => setEditAsstConfig({ ...editAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500" />
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{t('edit.name')} <span className="text-red-500">*</span></label>
+                <input required type="text" value={editAsstConfig.name} onChange={e => setEditAsstConfig({ ...editAsstConfig, name: e.target.value })} placeholder={t('edit.name.placeholder')} className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
-                <input type="text" value={editAsstConfig.description} onChange={e => setEditAsstConfig({ ...editAsstConfig, description: e.target.value })} placeholder="Briefly describe its purpose" className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500" />
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{t('edit.description')}</label>
+                <input type="text" value={editAsstConfig.description} onChange={e => setEditAsstConfig({ ...editAsstConfig, description: e.target.value })} placeholder={t('edit.description.placeholder')} className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500" />
               </div>
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">System Instructions <span className="text-red-500">*</span></label>
-                  <div className="relative">
-                    <button type="button" onClick={() => setShowSnippets(showSnippets === 'edit' ? null : 'edit')} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><Plus size={12}/> Insert snippet</button>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t('edit.instructions')} <span className="text-red-500">*</span></label>
+                  <div className="relative snippets-menu-container">
+                    <button type="button" onClick={() => setShowSnippets(showSnippets === 'edit' ? null : 'edit')} className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1"><Plus size={12} /> {t('edit.snippet')}</button>
                     {showSnippets === 'edit' && (
-                      <div className="absolute right-0 top-full mt-1 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm">
-                        {SNIPPETS.map((sn, i) => (
-                          <button key={i} type="button" onClick={() => { setEditAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300">
-                            <div className="font-medium text-xs text-slate-900 dark:text-white">{sn.label}</div>
-                            <div className="text-[11px] text-slate-500 truncate">{sn.text}</div>
-                          </button>
-                        ))}
+                      <div className="absolute right-0 top-full mt-3 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm max-h-60 overflow-y-auto">
+                        {(() => {
+                          const available = SNIPPETS.filter(sn => !editAsstConfig.instructions.includes(sn.text));
+                          return (
+                            <>
+                              {available.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const toAdd = available.map(sn => sn.text).join('\n\n');
+                                    setEditAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + toAdd }));
+                                    setShowSnippets(null);
+                                  }}
+                                  className="w-full text-left px-3 py-2 bg-primary-50 dark:bg-primary-500/10 text-primary-600 dark:text-primary-400 font-semibold border-b border-slate-100 dark:border-slate-800 hover:bg-primary-100 dark:hover:bg-primary-500/20 transition-colors"
+                                >
+                                  Insert All Available ({available.length})
+                                </button>
+                              )}
+                              {available.map((sn, i) => (
+                                <button key={i} type="button" title={sn.text} onClick={() => { setEditAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors group border-b border-slate-50 dark:border-slate-800/50 last:border-0">
+                                  <div className="font-medium text-xs text-slate-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400">{sn.label}</div>
+                                  <div className="text-[11px] text-slate-500 whitespace-pre-wrap line-clamp-2">{sn.text}</div>
+                                </button>
+                              ))}
+                              {available.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400 italic">All snippets added.</div>}
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
                 </div>
-                <p className="text-[11px] text-slate-500 mb-2">Define how the AI should behave, its tone, and strict rules.</p>
-                <textarea required value={editAsstConfig.instructions} onChange={e => setEditAsstConfig({ ...editAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed" />
+                <p className="text-[11px] text-slate-500 mb-2">{t('edit.instructions.hint')}</p>
+                <textarea required value={editAsstConfig.instructions} onChange={e => setEditAsstConfig({ ...editAsstConfig, instructions: e.target.value })} rows={5} className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white rounded-lg outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 font-mono text-sm leading-relaxed" />
               </div>
               <div className="pt-2 flex justify-end gap-3">
-                <button type="button" onClick={() => discardPendingEdits(editAsstConfig.id)} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">Cancel</button>
-                <button type="submit" disabled={!editAsstConfig.name || !editAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all">Save Changes</button>
+                <button type="button" onClick={() => {
+                  if (generatingAssistantId === editAsstConfig?.id) {
+                    setShowCancelAvatarModal(true);
+                  } else {
+                    discardPendingEdits(editAsstConfig.id);
+                  }
+                }} className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">{t('edit.cancel')}</button>
+                <button type="submit" disabled={!editAsstConfig.name || !editAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all">{t('edit.save')}</button>
               </div>
             </form>
           </div>
@@ -1682,196 +2250,293 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
       {/* CREATION WIZARD */}
       {showAddModal && (() => {
         const wizardSteps = [
-          { label: 'Basics', icon: <Briefcase size={16} /> },
-          { label: 'Instructions', icon: <BookOpen size={16} /> },
-          { label: 'Avatar', icon: <ImageIcon size={16} /> },
-          { label: 'Review', icon: <Check size={16} /> },
+          { label: t('wizard.step.basics'), icon: <Briefcase size={16} /> },
+          { label: t('wizard.step.instructions'), icon: <Cpu size={16} /> },
+          { label: t('wizard.step.avatar'), icon: <ImageIcon size={16} /> },
+          { label: t('wizard.step.knowledge'), icon: <BookOpen size={16} /> },
+          { label: t('wizard.step.review'), icon: <Check size={16} /> },
         ];
-        const instructionTemplates = [
-          { label: 'General Assistant', icon: <Lightbulb size={16} />, value: 'You are a helpful AI assistant. Answer based only on the provided context.' },
-          { label: 'Legal Advisor', icon: <Scale size={16} />, value: 'You are a legal analysis assistant. Provide precise, citation-backed legal interpretations based only on the provided documents. Always clarify that your analysis is informational, not legal advice.' },
-          { label: 'Code Reviewer', icon: <Code size={16} />, value: 'You are a senior code reviewer. Analyze code snippets and documents for bugs, security vulnerabilities, and best-practice violations. Provide actionable suggestions with corrected code examples.' },
-          { label: 'Medical Research', icon: <HeartPulse size={16} />, value: 'You are a medical research assistant. Summarize clinical findings, compare study methodologies, and extract key data points from provided medical documents. Always note limitations and recommend professional consultation.' },
-          { label: 'Academic Tutor', icon: <GraduationCap size={16} />, value: 'You are an academic tutor. Explain concepts from the provided materials in clear, simple language. Use examples, analogies, and step-by-step breakdowns. Ask follow-up questions to check understanding.' },
-          { label: 'Compliance Auditor', icon: <ShieldCheck size={16} />, value: 'You are a compliance and policy auditor. Analyze provided documents against regulatory frameworks and internal policies. Flag non-compliant sections, assess risk levels, and suggest remediation steps.' },
-        ];
+        const BLOCKED_EXTS = ['.png', '.jpg', '.jpeg', '.bmp', '.pptx'];
+        const addWizardDocs = (files: FileList | null) => {
+          if (!files) return;
+          const valid = Array.from(files).filter(f => {
+            const ext = '.' + f.name.split('.').pop()?.toLowerCase();
+            return !BLOCKED_EXTS.includes(ext);
+          });
+          setPendingDocs(prev => {
+            const names = new Set(prev.map(f => f.name));
+            return [...prev, ...valid.filter(f => !names.has(f.name))];
+          });
+        };
+        const instructionTemplates = INSTRUCTION_TEMPLATES;
         const canProceed = wizardStep === 0 ? !!newAsstConfig.name.trim() : wizardStep === 1 ? !!newAsstConfig.instructions.trim() : true;
+        const closeWizard = () => { setShowAddModal(false); setWizardStep(0); setNewAsstImage(null); setPendingDocs([]); };
         return (
-        <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[85vh]">
-            {/* Header with step indicator */}
-            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 shrink-0">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Create New Assistant</h2>
-                <button onClick={() => { setShowAddModal(false); setWizardStep(0); setNewAsstImage(null); }} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:hover:bg-slate-800"><X size={20} /></button>
-              </div>
-              {/* Step indicators */}
-              <div className="flex items-center gap-1">
-                {wizardSteps.map((s, i) => (
-                  <React.Fragment key={i}>
-                    <button 
-                      onClick={() => { if (i < wizardStep) setWizardStep(i); }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        i === wizardStep 
-                          ? 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 shadow-sm' 
-                          : i < wizardStep 
-                            ? 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer' 
+          <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[85vh]">
+              {/* Header with step indicator */}
+              <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 shrink-0">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{t('wizard.title')}</h2>
+                  <button onClick={closeWizard} className="text-slate-500 hover:text-slate-600 dark:text-slate-400 rounded-lg p-1 hover:bg-slate-100 dark:hover:bg-slate-800"><X size={20} /></button>
+                </div>
+                {/* Step indicators */}
+                <div className="flex items-center gap-1">
+                  {wizardSteps.map((s, i) => (
+                    <React.Fragment key={i}>
+                      <button
+                        onClick={() => { if (i < wizardStep) setWizardStep(i); }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${i === wizardStep
+                          ? 'bg-primary-100 dark:bg-primary-500/20 text-primary-700 dark:text-primary-300 shadow-sm'
+                          : i < wizardStep
+                            ? 'text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer'
                             : 'text-slate-400 dark:text-slate-600 cursor-default'
-                      }`}
-                    >
-                      {i < wizardStep ? <CheckCircle2 size={14} className="text-emerald-500" /> : s.icon}
-                      <span className="hidden sm:inline">{s.label}</span>
-                    </button>
-                    {i < wizardSteps.length - 1 && (
-                      <div className={`flex-1 h-px mx-1 ${i < wizardStep ? 'bg-emerald-300 dark:bg-emerald-600' : 'bg-slate-200 dark:bg-slate-700'}`} />
-                    )}
-                  </React.Fragment>
-                ))}
+                          }`}
+                      >
+                        {i < wizardStep ? <CheckCircle2 size={14} className="text-emerald-500" /> : s.icon}
+                        <span className="hidden sm:inline">{s.label}</span>
+                      </button>
+                      {i < wizardSteps.length - 1 && (
+                        <div className={`flex-1 h-px mx-1 ${i < wizardStep ? 'bg-emerald-300 dark:bg-emerald-600' : 'bg-slate-200 dark:bg-slate-700'}`} />
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
               </div>
-            </div>
 
-            {/* Step Content */}
-            <div className="flex-1 overflow-y-auto p-6">
-              {/* STEP 0: Basics */}
-              {wizardStep === 0 && (
-                <div className="space-y-5 animate-in fade-in duration-200">
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Basic Information</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Give your assistant an identity. The name is required, but a description helps you distinguish it later.</p>
+              {/* Step Content */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {/* STEP 0: Basics */}
+                {wizardStep === 0 && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">{t('wizard.basics.title')}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">{t('wizard.basics.hint')}</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{t('wizard.basics.name')} <span className="text-red-500">*</span></label>
+                      <input autoFocus type="text" value={newAsstConfig.name} onChange={e => setNewAsstConfig({ ...newAsstConfig, name: e.target.value })} placeholder={t('wizard.basics.name.placeholder')} className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">{t('wizard.basics.description')} <span className="text-xs text-slate-400 font-normal">{t('wizard.basics.description.optional')}</span></label>
+                      <textarea value={newAsstConfig.description} onChange={e => setNewAsstConfig({ ...newAsstConfig, description: e.target.value })} rows={3} placeholder={t('wizard.basics.description.placeholder')} className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm leading-relaxed" />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span className="text-red-500">*</span></label>
-                    <input autoFocus type="text" value={newAsstConfig.name} onChange={e => setNewAsstConfig({ ...newAsstConfig, name: e.target.value })} placeholder="e.g. Legal Contract Reviewer" className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description <span className="text-xs text-slate-400 font-normal">(optional)</span></label>
-                    <textarea value={newAsstConfig.description} onChange={e => setNewAsstConfig({ ...newAsstConfig, description: e.target.value })} rows={3} placeholder="Briefly describe the assistant's purpose and expertise..." className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white text-sm leading-relaxed" />
-                  </div>
-                </div>
-              )}
+                )}
 
-              {/* STEP 1: Instructions */}
-              {wizardStep === 1 && (
-                <div className="space-y-5 animate-in fade-in duration-200">
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">System Instructions</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Define how your assistant should behave. Choose a preset template or write your own.</p>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {instructionTemplates.map((t, i) => (
-                      <button key={i} type="button" onClick={() => setNewAsstConfig({ ...newAsstConfig, instructions: t.value })} className={`text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center gap-2 ${
-                        newAsstConfig.instructions === t.value
-                          ? 'border-indigo-400 dark:border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 shadow-sm ring-1 ring-indigo-200 dark:ring-indigo-500/30'
-                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                      }`}>
-                        {t.icon} {t.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Custom Instructions <span className="text-red-500">*</span></label>
-                      <div className="relative">
-                        <button type="button" onClick={() => setShowSnippets(showSnippets === 'create' ? null : 'create')} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"><Plus size={12}/> Insert snippet</button>
-                        {showSnippets === 'create' && (
-                          <div className="absolute right-0 top-full mt-1 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm">
-                            {SNIPPETS.map((sn, i) => (
-                              <button key={i} type="button" onClick={() => { setNewAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300">
-                                <div className="font-medium text-xs text-slate-900 dark:text-white">{sn.label}</div>
-                                <div className="text-[11px] text-slate-500 truncate">{sn.text}</div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                {/* STEP 1: Instructions */}
+                {wizardStep === 1 && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">{t('wizard.instructions.title')}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{t('wizard.instructions.hint')}</p>
                     </div>
-                    <textarea value={newAsstConfig.instructions} onChange={e => setNewAsstConfig({ ...newAsstConfig, instructions: e.target.value })} rows={6} className="w-full px-4 py-3 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
-                  </div>
-                </div>
-              )}
-
-              {/* STEP 2: Avatar */}
-              {wizardStep === 2 && (
-                <div className="space-y-5 animate-in fade-in duration-200">
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Avatar</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Upload an image to personalize your assistant. You can also generate an AI avatar after creation from the edit panel.</p>
-                  </div>
-                  <div className="flex flex-col items-center gap-4">
-                    <div className="w-28 h-28 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-600">
-                      {newAsstImage ? (
-                        <img src={URL.createObjectURL(newAsstImage)} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(URL.createObjectURL(newAsstImage))} />
-                      ) : (
-                        <Bot size={40} className="text-slate-400" />
-                      )}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {[<Lightbulb size={16} />, <Scale size={16} />, <Code size={16} />, <HeartPulse size={16} />, <GraduationCap size={16} />, <ShieldCheck size={16} />].map((icon, i) => {
+                        const t = instructionTemplates[i];
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => {
+                              if (selectedTemplate === t.label) return;
+                              setNewAsstConfig({ ...newAsstConfig, instructions: t.instructions });
+                              setSelectedTemplate(t.label);
+                            }}
+                            className={`text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center gap-2 ${selectedTemplate === t.label
+                              ? 'border-primary-400 dark:border-primary-500 bg-primary-50 dark:bg-primary-500/10 text-primary-700 dark:text-primary-300 shadow-sm ring-1 ring-primary-200 dark:ring-primary-500/30'
+                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                              }`}
+                          >
+                            {icon} {t.label}
+                          </button>
+                        );
+                      })}
                     </div>
-                    <div className="flex items-center gap-3">
-                      <input type="file" ref={newAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) setNewAsstImage(e.target.files[0]); }} />
-                      <button type="button" onClick={() => newAvatarInputRef.current?.click()} className="px-4 py-2 text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors flex items-center gap-2">
-                        <ImageIcon size={16} /> Upload Image
-                      </button>
-                      {newAsstImage && (
-                        <button type="button" onClick={() => setNewAsstImage(null)} className="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-colors">
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                    <p className="text-xs text-slate-400 text-center">AI avatar generation will be available after creation.</p>
-                  </div>
-                </div>
-              )}
-
-              {/* STEP 3: Review */}
-              {wizardStep === 3 && (
-                <div className="space-y-5 animate-in fade-in duration-200">
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">Review & Create</h3>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">Verify your assistant's configuration before launching.</p>
-                  </div>
-                  <div className="bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
-                    <div className="flex items-center gap-4 p-4">
-                      <div className="w-14 h-14 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
-                        {newAsstImage ? (
-                          <img src={URL.createObjectURL(newAsstImage)} alt="Avatar" className="w-full h-full object-cover" />
-                        ) : (
-                          <Bot size={24} className="text-slate-400" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <h4 className="text-base font-semibold text-slate-900 dark:text-white truncate">{newAsstConfig.name}</h4>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 truncate">{newAsstConfig.description || 'No description'}</p>
-                      </div>
-                      <button type="button" onClick={() => setWizardStep(0)} className="ml-auto text-xs text-indigo-600 dark:text-indigo-400 hover:underline shrink-0">Edit</button>
-                    </div>
-                    <div className="p-4">
+                    <div>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">System Instructions</span>
-                        <button type="button" onClick={() => setWizardStep(1)} className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline">Edit</button>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t('wizard.instructions.label')} <span className="text-red-500">*</span></label>
+                        <div className="relative snippets-menu-container">
+                          <button type="button" onClick={() => setShowSnippets(showSnippets === 'create' ? null : 'create')} className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1"><Plus size={12} /> {t('wizard.instructions.snippet')}</button>
+                          {showSnippets === 'create' && (
+                            <div className="absolute right-0 top-full mt-2.5 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm max-h-60 overflow-y-auto mb-4">
+                              {(() => {
+                                const available = SNIPPETS.filter(sn => !newAsstConfig.instructions.includes(sn.text));
+                                return (
+                                  <>
+                                    {available.length > 1 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const toAdd = available.map(sn => sn.text).join('\n\n');
+                                          setNewAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + toAdd }));
+                                          setShowSnippets(null);
+                                        }}
+                                        className="w-full text-left px-3 py-2 bg-primary-50 dark:bg-primary-500/10 text-primary-600 dark:text-primary-400 font-semibold border-b border-slate-100 dark:border-slate-800 hover:bg-primary-100 dark:hover:bg-primary-500/20 transition-colors"
+                                      >
+                                        Insert All Available ({available.length})
+                                      </button>
+                                    )}
+                                    {available.map((sn, i) => (
+                                      <button key={i} type="button" onClick={() => { setNewAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors border-b border-slate-50 dark:border-slate-800/50 last:border-0">
+                                        <div className="font-medium text-xs text-slate-900 dark:text-white">{sn.label}</div>
+                                        <div className="text-[11px] text-slate-500 whitespace-pre-wrap">{sn.text}</div>
+                                      </button>
+                                    ))}
+                                    {available.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400 italic">All snippets added.</div>}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono leading-relaxed bg-white dark:bg-slate-900 rounded-lg p-3 border border-slate-100 dark:border-slate-800 max-h-40 overflow-y-auto">{newAsstConfig.instructions}</pre>
+                      <textarea value={newAsstConfig.instructions} onChange={e => setNewAsstConfig({ ...newAsstConfig, instructions: e.target.value })} rows={6} className="w-full px-4 py-3 border border-slate-300 dark:border-slate-700 rounded-xl outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 font-mono text-sm leading-relaxed bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white" />
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
 
-            {/* Footer with navigation */}
-            <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 flex items-center justify-between shrink-0">
-              <button type="button" onClick={() => { if (wizardStep === 0) { setShowAddModal(false); setWizardStep(0); setNewAsstImage(null); } else setWizardStep(wizardStep - 1); }} className="px-4 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors flex items-center gap-1.5">
-                <ChevronLeft size={16} /> {wizardStep === 0 ? 'Cancel' : 'Back'}
-              </button>
-              {wizardStep < 3 ? (
-                <button type="button" disabled={!canProceed} onClick={() => setWizardStep(wizardStep + 1)} className="px-5 py-2.5 text-sm font-medium bg-indigo-600 text-white rounded-xl hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all flex items-center gap-1.5">
-                  Next <ChevronRight size={16} />
+                {/* STEP 2: Avatar */}
+                {wizardStep === 2 && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">{t('wizard.avatar.title')}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">{t('wizard.avatar.hint')}</p>
+                    </div>
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="w-28 h-28 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-600">
+                        {newAsstImage ? (
+                          <img src={URL.createObjectURL(newAsstImage)} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(URL.createObjectURL(newAsstImage))} />
+                        ) : (
+                          <Bot size={40} className="text-slate-400" />
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input type="file" ref={newAvatarInputRef} accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) setNewAsstImage(e.target.files[0]); }} />
+                        <button type="button" onClick={() => newAvatarInputRef.current?.click()} className="px-4 py-2 text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors flex items-center gap-2">
+                          <ImageIcon size={16} /> {t('wizard.avatar.upload')}
+                        </button>
+                        {newAsstImage && (
+                          <button type="button" onClick={() => setNewAsstImage(null)} className="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-colors">
+                            {t('wizard.avatar.remove')}
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-400 text-center">{t('wizard.avatar.aiLater')}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 3: Knowledge */}
+                {wizardStep === 3 && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <input
+                      type="file"
+                      ref={wizardDocInputRef}
+                      multiple
+                      accept=".pdf,.docx,.txt,.md,.csv"
+                      className="hidden"
+                      onChange={e => addWizardDocs(e.target.files)}
+                    />
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">{t('wizard.knowledge.title')}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{t('wizard.knowledge.hint')}</p>
+                    </div>
+                    <div
+                      onDragOver={e => { e.preventDefault(); setWizardDragOver(true); }}
+                      onDragLeave={() => setWizardDragOver(false)}
+                      onDrop={e => { e.preventDefault(); setWizardDragOver(false); addWizardDocs(e.dataTransfer.files); }}
+                      onClick={() => wizardDocInputRef.current?.click()}
+                      className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center gap-3 cursor-pointer transition-colors ${wizardDragOver ? 'border-primary-400 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/30'}`}
+                    >
+                      <Upload size={28} className={wizardDragOver ? 'text-primary-500' : 'text-slate-400'} />
+                      <div className="text-center">
+                        <p className="text-sm font-medium text-slate-700 dark:text-slate-300">{t('wizard.knowledge.dropzone')}</p>
+                        <p className="text-xs text-slate-400 mt-1">{t('wizard.knowledge.formats')}</p>
+                      </div>
+                    </div>
+                    {pendingDocs.length > 0 && (
+                      <ul className="space-y-2">
+                        {pendingDocs.map((f, i) => (
+                          <li key={i} className="flex items-center gap-3 px-3 py-2.5 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <FileText size={16} className="text-slate-400 shrink-0" />
+                            <span className="text-sm text-slate-700 dark:text-slate-300 truncate flex-1">{f.name}</span>
+                            <span className="text-xs text-slate-400 shrink-0">{(f.size / 1024).toFixed(0)} KB</span>
+                            <button type="button" onClick={e => { e.stopPropagation(); setPendingDocs(prev => prev.filter((_, j) => j !== i)); }} className="text-slate-400 hover:text-red-500 transition-colors shrink-0">
+                              <X size={14} />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {pendingDocs.length === 0 && (
+                      <p className="text-center text-xs text-slate-400">{t('wizard.knowledge.empty')}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 4: Review */}
+                {wizardStep === 4 && (
+                  <div className="space-y-5 animate-in fade-in duration-200">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-1">{t('wizard.review.title')}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">{t('wizard.review.hint')}</p>
+                    </div>
+                    <div className="bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
+                      <div className="flex items-center gap-4 p-4">
+                        <div className="w-14 h-14 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
+                          {newAsstImage ? (
+                            <img src={URL.createObjectURL(newAsstImage)} alt="Avatar" className="w-full h-full object-cover" />
+                          ) : (
+                            <Bot size={24} className="text-slate-400" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="text-base font-semibold text-slate-900 dark:text-white truncate">{newAsstConfig.name}</h4>
+                          <p className="text-sm text-slate-500 dark:text-slate-400 truncate">{newAsstConfig.description || t('wizard.review.noDescription')}</p>
+                        </div>
+                        <button type="button" onClick={() => setWizardStep(0)} className="ml-auto text-xs text-primary-600 dark:text-primary-400 hover:underline shrink-0">{t('wizard.review.edit')}</button>
+                      </div>
+                      <div className="p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">{t('wizard.review.instructions')}</span>
+                          <button type="button" onClick={() => setWizardStep(1)} className="text-xs text-primary-600 dark:text-primary-400 hover:underline">{t('wizard.review.edit')}</button>
+                        </div>
+                        <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono leading-relaxed bg-white dark:bg-slate-900 rounded-lg p-3 border border-slate-100 dark:border-slate-800 max-h-40 overflow-y-auto">{newAsstConfig.instructions}</pre>
+                      </div>
+                      <div className="p-4">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">{t('wizard.review.kb')}</span>
+                          <button type="button" onClick={() => setWizardStep(3)} className="text-xs text-primary-600 dark:text-primary-400 hover:underline">{t('wizard.review.edit')}</button>
+                        </div>
+                        {pendingDocs.length > 0 ? (
+                          <p className="text-sm text-slate-700 dark:text-slate-300 mt-2">{t('wizard.review.docs', { n: pendingDocs.length, s: pendingDocs.length > 1 ? 's' : '' })}</p>
+                        ) : (
+                          <p className="text-sm text-slate-400 mt-2">{t('wizard.review.noDocs')}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer with navigation */}
+              <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 flex items-center justify-between shrink-0">
+                <button type="button" onClick={() => { if (wizardStep === 0) { closeWizard(); } else setWizardStep(wizardStep - 1); }} className="px-4 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors flex items-center gap-1.5">
+                  <ChevronLeft size={16} /> {wizardStep === 0 ? t('wizard.cancel') : t('wizard.back')}
                 </button>
-              ) : (
-                <button type="button" onClick={(e) => handleCreateAssistant(e)} disabled={!newAsstConfig.name || !newAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all flex items-center gap-1.5">
-                  <Zap size={16} /> Launch Assistant
-                </button>
-              )}
+                {wizardStep < 4 ? (
+                  <button type="button" disabled={!canProceed} onClick={() => setWizardStep(wizardStep + 1)} className="px-5 py-2.5 text-sm font-medium bg-primary-600 text-white rounded-xl hover:bg-primary-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all flex items-center gap-1.5">
+                    {t('wizard.next')} <ChevronRight size={16} />
+                  </button>
+                ) : (
+                  <button type="button" onClick={(e) => handleCreateAssistant(e)} disabled={!newAsstConfig.name || !newAsstConfig.instructions} className="px-5 py-2.5 text-sm font-medium bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all flex items-center gap-1.5">
+                    {t('wizard.launch')}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
         );
       })()}
 
@@ -1880,20 +2545,20 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden p-6 text-center">
             <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Delete Assistant?</h3>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">Are you sure you want to permanently delete "<span className="font-semibold text-slate-700 dark:text-slate-300">{assistantToDelete.name}</span>"? This will also remove all its sessions and knowledge base associations.</p>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{t('delete.assistant.title')}</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">{t('delete.assistant.message', { name: assistantToDelete.name })}</p>
             <div className="flex justify-center gap-3">
               <button
                 onClick={() => setAssistantToDelete(null)}
                 className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
-                Cancel
+                {t('delete.cancel')}
               </button>
               <button
                 onClick={confirmDeleteAssistant}
                 className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
               >
-                Yes, Delete
+                {t('delete.confirm')}
               </button>
             </div>
           </div>
@@ -1905,20 +2570,20 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden p-6 text-center">
             <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Delete Conversation?</h3>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">Are you sure you want to delete "<span className="font-semibold text-slate-700 dark:text-slate-300">{sessionToDelete.title || "New Conversation"}</span>"? All history will be lost.</p>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{t('delete.session.title')}</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">{t('delete.session.message', { title: sessionToDelete.title || t('session.default') })}</p>
             <div className="flex justify-center gap-3">
               <button
                 onClick={() => setSessionToDelete(null)}
                 className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
-                Cancel
+                {t('delete.cancel')}
               </button>
               <button
                 onClick={confirmDeleteSession}
                 className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
               >
-                Yes, Delete
+                {t('delete.confirm')}
               </button>
             </div>
           </div>
@@ -1930,20 +2595,20 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden p-6 text-center">
             <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Delete Document?</h3>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">Are you sure you want to remove "<span className="font-semibold text-slate-700 dark:text-slate-300">{documentToDelete.filename}</span>" from this assistant's knowledge base?</p>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{t('delete.document.title')}</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">{t('delete.document.message', { filename: documentToDelete.filename })}</p>
             <div className="flex justify-center gap-3">
               <button
                 onClick={() => setDocumentToDelete(null)}
                 className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
               >
-                Cancel
+                {t('delete.cancel')}
               </button>
               <button
                 onClick={confirmDeleteDocument}
                 className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
               >
-                Yes, Delete
+                {t('delete.confirm')}
               </button>
             </div>
           </div>
@@ -1953,9 +2618,9 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
       {showCancelAvatarModal && (
         <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 p-6">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Avatar is generating</h3>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">{t('avatar.modal.title')}</h3>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
-              An avatar is currently being generated. What would you like to do?
+              {t('avatar.modal.message')}
             </p>
             <div className="flex flex-col gap-3">
               <button
@@ -1966,7 +2631,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 }}
                 className="w-full px-4 py-2.5 bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20 rounded-lg font-medium text-sm transition-colors text-left flex items-center"
               >
-                Cancel generation entirely
+                {t('avatar.modal.cancel')}
               </button>
               <button
                 onClick={() => {
@@ -1975,13 +2640,13 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 }}
                 className="w-full px-4 py-2.5 bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg font-medium text-sm transition-colors text-left"
               >
-                Continue generation in background
+                {t('avatar.modal.background')}
               </button>
               <button
                 onClick={() => setShowCancelAvatarModal(false)}
-                className="w-full px-4 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 rounded-lg font-medium text-sm transition-colors text-center mt-2"
+                className="w-full px-4 py-2.5 bg-primary-600 text-white hover:bg-primary-500 rounded-lg font-medium text-sm transition-colors text-center mt-2"
               >
-                Resume waiting
+                {t('avatar.modal.resume')}
               </button>
             </div>
           </div>
@@ -1992,16 +2657,16 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
       {showSaveWhileGeneratingModal && (
         <div className="fixed inset-0 bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 p-6 text-center">
-            <Loader2 size={40} className="mx-auto text-indigo-500 animate-spin mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Generation Running</h3>
+            <Loader2 size={40} className="mx-auto text-primary-500 animate-spin mb-4" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{t('avatar.saving.title')}</h3>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
-              An avatar is currently generating. Please wait for it to complete or cancel it before saving your changes.
+              {t('avatar.saving.message')}
             </p>
             <button
               onClick={() => setShowSaveWhileGeneratingModal(false)}
-              className="w-full px-4 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 rounded-lg font-medium text-sm transition-colors"
+              className="w-full px-4 py-2.5 bg-primary-600 text-white hover:bg-primary-500 rounded-lg font-medium text-sm transition-colors"
             >
-              Go Back
+              {t('avatar.saving.back')}
             </button>
           </div>
         </div>
@@ -2010,12 +2675,12 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
       {/* DOCUMENT FILE PREVIEWER MODAL */}
       {previewDoc && (
         <div className="fixed inset-0 bg-slate-900/60 dark:bg-slate-950/70 backdrop-blur-sm z-[250] flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-4xl max-h-[90vh] shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-4xl max-h-[90vh] shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden preview-modal-content">
             {/* Header */}
             <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50 shrink-0">
               <div className="flex items-center gap-3 overflow-hidden">
-                <div className="p-2 bg-indigo-50 dark:bg-indigo-500/10 rounded-lg">
-                  <FileText size={18} className="text-indigo-500" />
+                <div className="p-2 bg-primary-50 dark:bg-primary-500/10 rounded-lg">
+                  <FileText size={18} className="text-primary-500" />
                 </div>
                 <div className="overflow-hidden">
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-white truncate">{previewDoc.filename}</h3>
@@ -2032,8 +2697,8 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
               {previewLoading ? (
                 <div className="flex items-center justify-center h-64">
                   <div className="flex flex-col items-center gap-3">
-                    <Loader2 size={32} className="animate-spin text-indigo-500" />
-                    <span className="text-sm text-slate-500">Loading preview...</span>
+                    <Loader2 size={32} className="animate-spin text-primary-500" />
+                    <span className="text-sm text-slate-500">{t('preview.loading')}</span>
                   </div>
                 </div>
               ) : previewContent?.type === 'error' ? (
@@ -2044,10 +2709,16 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   </div>
                 </div>
               ) : previewContent?.type === 'md' ? (
-                <div className="p-6 md:p-8 prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-indigo-600 dark:prose-code:text-indigo-300 prose-headings:text-slate-900 dark:prose-headings:text-white">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {previewContent.content || ''}
-                  </ReactMarkdown>
+                <div className="p-6 md:p-8 prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-primary-600 dark:prose-code:text-primary-300 prose-headings:text-slate-900 dark:prose-headings:text-white">
+                  {previewContent.highlightText && (
+                    <div className="mb-6 p-4 bg-primary-50 dark:bg-primary-500/10 border border-primary-100 dark:border-primary-500/20 rounded-xl flex items-start gap-3">
+                      <Sparkles size={18} className="text-primary-500 shrink-0 mt-0.5" />
+                      <div className="text-sm text-slate-700 dark:text-slate-300">
+                        <span className="font-semibold text-primary-600 dark:text-primary-400">Grounded Preview:</span> We've highlighted the passages used by the assistant to answer your question.
+                      </div>
+                    </div>
+                  )}
+                  <HighlightedText text={previewContent.content || ''} highlight={previewContent.highlightText} isMarkdown={true} />
                 </div>
               ) : previewContent?.type === 'csv' ? (
                 <div className="p-6 overflow-x-auto">
@@ -2064,15 +2735,56 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   </table>
                 </div>
               ) : previewContent?.type === 'pdf' ? (
-                <iframe src={previewContent.blobUrl} className="w-full h-[75vh]" title="PDF Preview" />
+                <div className="flex flex-col h-full">
+                  {previewContent.highlightText && (
+                    <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-100 dark:border-amber-900/30 flex items-start gap-3">
+                      <Quote size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                      <div className="text-sm text-amber-900 dark:text-amber-200">
+                        <span className="font-semibold">Used in Answer:</span> "{previewContent.highlightText.split('\n\n---\n\n')[0]}..."
+                        <p className="text-xs mt-1 opacity-80">PDF highlighting is limited; refer to the snippet above for the exact grounded passage.</p>
+                      </div>
+                    </div>
+                  )}
+                  <iframe src={previewContent.blobUrl} className="w-full h-[75vh]" title="PDF Preview" />
+                </div>
               ) : previewContent?.type === 'image' ? (
                 <div className="flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-950">
                   <img src={previewContent.blobUrl} alt={previewContent.filename} className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-lg" />
                 </div>
+              ) : previewContent?.type === 'snippet' ? (
+                <div className="p-6 md:p-8">
+                  <div className="bg-primary-50 dark:bg-primary-500/5 rounded-xl border border-primary-100 dark:border-primary-500/20 p-6">
+                    <div className="text-[10px] font-bold text-primary-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                      <Quote size={12} /> {t('preview.snippet.label')}
+                    </div>
+                    <p className="text-base text-slate-800 dark:text-slate-200 italic leading-relaxed font-serif">
+                      "{previewContent.content}"
+                    </p>
+                    <div className="mt-6 flex justify-end">
+                      <button
+                        onClick={() => {
+                          setPreviewContent(null);
+                          handlePreviewDocument({ id: previewDoc.id, filename: previewDoc.filename });
+                        }}
+                        className="text-xs font-medium text-primary-600 dark:text-primary-400 hover:underline"
+                      >
+                        {t('preview.snippet.viewFull')}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               ) : previewContent ? (
                 <div className="p-6">
+                  {previewContent.highlightText && (
+                    <div className="mb-4 p-3 bg-primary-50 dark:bg-primary-500/10 border border-primary-100 dark:border-primary-500/20 rounded-xl flex items-center gap-2">
+                      <Sparkles size={14} className="text-primary-500" />
+                      <div className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                        Found matching passages in document. Scrolled to first match.
+                      </div>
+                    </div>
+                  )}
                   <div className="bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 p-5 overflow-auto max-h-[65vh]">
-                    <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap font-mono leading-relaxed break-words">{previewContent.content}</pre>
+                    <HighlightedText text={previewContent.content || ''} highlight={previewContent.highlightText} isMarkdown={false} />
                   </div>
                 </div>
               ) : null}
@@ -2101,20 +2813,34 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 ref={chatSearchInputRef}
                 value={chatSearchQuery}
                 onChange={(e) => { setChatSearchQuery(e.target.value); runChatSearch(e.target.value); }}
-                placeholder="Search this conversation..."
+                placeholder={t('chat.search.placeholder')}
                 className="flex-1 bg-transparent outline-none text-sm text-slate-900 dark:text-white placeholder-slate-400"
               />
-              <button onClick={() => setChatSearchOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded"><X size={16}/></button>
+              <button onClick={() => setChatSearchOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded"><X size={16} /></button>
             </div>
             <div className="max-h-[60vh] overflow-y-auto">
               {chatSearchQuery.trim() === '' ? (
-                <div className="p-6 text-center text-sm text-slate-500">Type to search messages in this chat.</div>
+                <div className="p-6 text-center text-sm text-slate-500">{t('chat.search.empty')}</div>
               ) : chatSearchResults.length === 0 ? (
-                <div className="p-6 text-center text-sm text-slate-500">No matches.</div>
+                <div className="p-6 text-center text-sm text-slate-500">{t('chat.search.noResults')}</div>
               ) : (
                 <ul className="divide-y divide-slate-100 dark:divide-slate-800">
                   {chatSearchResults.map(r => (
-                    <li key={r.id} className="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                    <li
+                      key={r.id}
+                      onClick={() => {
+                        setChatSearchOpen(false);
+                        setTimeout(() => {
+                          const el = document.getElementById(`message-${r.id}`);
+                          if (el) {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            el.classList.add('ring-4', 'ring-primary-500/30', 'bg-primary-50/50', 'dark:bg-primary-500/10');
+                            setTimeout(() => el.classList.remove('ring-4', 'ring-primary-500/30', 'bg-primary-50/50', 'dark:bg-primary-500/10'), 2000);
+                          }
+                        }, 100);
+                      }}
+                      className="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 cursor-pointer transition-colors"
+                    >
                       <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 mb-1">{r.role === 'user' ? 'You' : selectedAssistant?.name || 'Assistant'} · {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
                       <div className="text-sm text-slate-700 dark:text-slate-300 line-clamp-3 whitespace-pre-wrap">{r.content}</div>
                     </li>
@@ -2126,7 +2852,78 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         </div>
       )}
 
+      {/* IMPORT STRUCTURE INFO MODAL */}
+      {showImportInfo && (
+        <div 
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4"
+          onClick={() => setShowImportInfo(false)}
+        >
+          <div 
+            className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/50">
+              <h3 className="font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                <Info size={18} className="text-primary-500" /> {t('import.modal.title')}
+              </h3>
+              <button onClick={() => setShowImportInfo(false)} className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                {t('import.modal.description')}
+              </p>
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 font-mono text-[11px] leading-relaxed border border-slate-200 dark:border-slate-700">
+                <div className="text-primary-600 dark:text-primary-400">assistant_name.zip/</div>
+                <div className="ml-4 flex items-center gap-1.5"><FileText size={12} className="text-slate-400" /> manifest.json <span className="text-slate-400 italic">({t('import.modal.required')})</span></div>
+                <div className="ml-4 flex items-center gap-1.5"><Folder size={12} className="text-slate-400" /> avatar/ <span className="text-slate-400 italic">({t('import.modal.optional')})</span></div>
+                <div className="ml-8 text-slate-500">custom_avatar.png</div>
+                <div className="ml-4 flex items-center gap-1.5"><Folder size={12} className="text-slate-400" /> documents/ <span className="text-slate-400 italic">({t('import.modal.optional')})</span></div>
+                <div className="ml-8 text-slate-500">file1.pdf</div>
+                <div className="ml-8 text-slate-500">file2.docx</div>
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-1 bg-slate-50 dark:bg-slate-800/30 p-2.5 rounded-lg border border-slate-200/60 dark:border-slate-700/60">
+                <p>• <strong className="text-slate-700 dark:text-slate-300">manifest.json</strong>: {t('import.modal.manifest.hint')}</p>
+                <div className="bg-slate-100 dark:bg-slate-900/50 p-2 rounded mt-1 mb-2 font-mono text-[9px] text-slate-600 dark:text-slate-400 overflow-x-auto">
+                  {`{
+  "schema_version": 1,
+  "name": "Assistant Name",
+  "instructions": "...",
+  "image_filename": "avatar.png",
+  "documents": [{"filename": "doc.pdf"}]
+}`}
+                </div>
+                <p>• <strong className="text-slate-700 dark:text-slate-300">documents/</strong>: {t('import.modal.documents.hint')}</p>
+                <p>• <strong className="text-slate-700 dark:text-slate-300">avatar/</strong>: {t('import.modal.avatar.hint')}</p>
+              </div>
+              <button
+                onClick={() => setShowImportInfo(false)}
+                className="w-full py-2.5 bg-primary-600 hover:bg-primary-500 text-white rounded-xl font-medium shadow-md shadow-primary-500/20 transition-colors mt-2"
+              >
+                {t('import.modal.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ANIMATED TOAST NOTIFICATION */}
+      {creationProgress && (
+        <div className="fixed bottom-6 right-6 z-[400] animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <div className="px-5 py-4 rounded-xl shadow-xl flex items-center gap-3 border bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/50 text-slate-700 dark:text-slate-300 min-w-[260px]">
+            <Loader2 size={20} className="text-primary-500 shrink-0 animate-spin" />
+            <div className="flex flex-col flex-1 min-w-0">
+              <span className="font-semibold text-sm">{t('progress.indexing')}</span>
+              <span className="text-xs mt-0.5 text-slate-500 dark:text-slate-400">{t('progress.indexing.detail', { current: creationProgress.current, total: creationProgress.total })}</span>
+              <div className="mt-2 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                <div className="h-full bg-primary-500 rounded-full transition-all duration-300" style={{ width: `${(creationProgress.current / creationProgress.total) * 100}%` }} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toastConfig && (
         <div className="fixed bottom-6 right-6 z-[400] animate-in slide-in-from-bottom-5 fade-in duration-300">
           <div className={`px-5 py-4 rounded-xl shadow-xl flex items-center gap-3 border ${toastConfig.type === 'success'
@@ -2156,13 +2953,12 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
               </span>
             </div>
             {toastConfig.action && (
-              <button 
+              <button
                 onClick={() => { toastConfig.action!.onClick(); setToastConfig(null); }}
-                className={`ml-2 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm border transition-colors ${
-                  toastConfig.type === 'success' 
-                    ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30 hover:bg-emerald-200 dark:hover:bg-emerald-500/30' 
-                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
-                }`}
+                className={`ml-2 px-3 py-1.5 text-xs font-semibold rounded-lg shadow-sm border transition-colors ${toastConfig.type === 'success'
+                  ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30 hover:bg-emerald-200 dark:hover:bg-emerald-500/30'
+                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  }`}
               >
                 {toastConfig.action.label}
               </button>

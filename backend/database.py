@@ -108,6 +108,7 @@ class ChatMessage(Base):
     content = Column(Text, nullable=False)
     citations = Column(Text, nullable=True) # Stored as JSON string
     feedback = Column(Integer, nullable=True)  # -1 / 0 / 1
+    context = Column(Text, nullable=True)      # Stored as JSON string (relevant chunks)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ChatSession", back_populates="messages")
