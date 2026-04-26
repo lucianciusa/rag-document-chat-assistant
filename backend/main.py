@@ -338,8 +338,9 @@ def upload_document(assistant_id: str, file: UploadFile = File(...), db: Session
     if not assistant: return {"error": "Assistant not found"}
 
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext in [".png", ".jpg", ".jpeg", ".bmp", ".pptx"]:
-        raise HTTPException(status_code=400, detail="Images and PPTX files are not allowed as knowledge base documents.")
+    supported = {".pdf", ".docx", ".pptx", ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".bmp"}
+    if ext not in supported:
+        raise HTTPException(status_code=422, detail=f"Unsupported file format '{ext}'. Supported: PDF, DOCX, PPTX, TXT, CSV, MD, PNG, JPG, JPEG, BMP.")
 
     storage.upload_document(file.filename, file)
     try:
@@ -350,8 +351,14 @@ def upload_document(assistant_id: str, file: UploadFile = File(...), db: Session
         db.add(doc)
         db.commit()
         return {"filename": file.filename, "status": "indexed", "chunks": file_stats["chunks"]}
+    except ValueError as e:
+        try: storage.delete_document(file.filename)
+        except Exception: pass
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        try: storage.delete_document(file.filename)
+        except Exception: pass
+        raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
 
 @router.get("/assistants/{assistant_id}/documents/")
 def list_documents(assistant_id: str, db: Session = Depends(get_db)):
@@ -400,7 +407,20 @@ def create_session(assistant_id: str, db: Session = Depends(get_db)):
 
 @router.get("/assistants/{assistant_id}/sessions/")
 def list_sessions(assistant_id: str, db: Session = Depends(get_db)):
-    return db.query(ChatSession).filter(ChatSession.assistant_id == assistant_id).order_by(ChatSession.updated_at.desc()).all()
+    sessions = db.query(ChatSession).filter(ChatSession.assistant_id == assistant_id).order_by(ChatSession.updated_at.desc()).all()
+    result = []
+    for s in sessions:
+        # Count messages for this session
+        count = db.query(ChatMessage).filter(ChatMessage.session_id == s.id).count()
+        result.append({
+            "id": s.id,
+            "assistant_id": s.assistant_id,
+            "title": s.title,
+            "created_at": s.created_at.isoformat() + "Z" if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() + "Z" if s.updated_at else None,
+            "message_count": count
+        })
+    return result
 
 @router.get("/sessions/recent")
 def get_recent_sessions(limit: int = 5, db: Session = Depends(get_db)):
@@ -413,6 +433,7 @@ def get_recent_sessions(limit: int = 5, db: Session = Depends(get_db)):
     result = []
     for s in sessions:
         asst = db.query(Assistant).filter(Assistant.id == s.assistant_id).first()
+        count = db.query(ChatMessage).filter(ChatMessage.session_id == s.id).count()
         result.append({
             "id": s.id,
             "title": s.title,
@@ -420,6 +441,7 @@ def get_recent_sessions(limit: int = 5, db: Session = Depends(get_db)):
             "assistant_id": s.assistant_id,
             "assistant_name": asst.name if asst else "Unknown",
             "assistant_image_url": asst.image_url if asst else None,
+            "message_count": count
         })
     return result
 
@@ -465,6 +487,15 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
         db.delete(session)
         db.commit()
     return {"status": "deleted"}
+
+@router.delete("/sessions/{session_id}/messages")
+def clear_session_messages(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
+    db.commit()
+    return {"status": "cleared"}
 
 @router.post("/sessions/{session_id}/chat/stream")
 async def send_chat_message_stream(session_id: str, request: dict, db: Session = Depends(get_db)):

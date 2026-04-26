@@ -84,7 +84,7 @@ const es: Record<string, string> = {
   'docs.title': 'Base de Conocimiento',
   'docs.hint': 'Sube archivos para este asistente. No verá archivos de otros asistentes.',
   'docs.upload.cta': 'Haz clic para subir o arrastra y suelta',
-  'docs.upload.formats': 'PDF, Word, TXT, CSV, MD (máx. 10 MB cada uno)',
+  'docs.upload.formats': 'PDF, Word, PPTX, TXT, CSV, MD, PNG, JPG (máx. 10 MB cada uno)',
   'docs.upload.processing': 'Procesando archivos…',
   'docs.empty.title': 'Sin documentos aún',
   'docs.empty.hint': 'Sube PDFs, Word o archivos de texto para dar conocimiento a este asistente.',
@@ -219,6 +219,13 @@ const es: Record<string, string> = {
   'toast.chat.deleted.msg': 'La conversación ha sido eliminada.',
   'toast.chat.deleteFailed': 'Error al Eliminar',
   'toast.chat.deleteFailed.msg': 'Hubo un error al eliminar la conversación.',
+  'toast.chat.cleared': 'Conversación Limpiada',
+  'toast.chat.cleared.msg': 'Todos los mensajes han sido eliminados.',
+  'toast.chat.clearFailed': 'Error al Limpiar',
+  'toast.chat.clearFailed.msg': 'Hubo un error al limpiar los mensajes.',
+  'clear.session.title': '¿Limpiar Conversación?',
+  'clear.session.message': 'Todos los mensajes en "{title}" serán eliminados. La conversación en sí permanecerá.',
+  'clear.session.confirm': 'Limpiar Mensajes',
   'toast.avatar.complete': 'Generación Completa',
   'toast.avatar.complete.msg': 'Tu nuevo avatar está listo para revisar.',
   'toast.avatar.review': 'Revisar',
@@ -287,6 +294,9 @@ const es: Record<string, string> = {
 
   // ── Misc ───────────────────────────────────────────────────
   'lang.toggle': 'EN',
+  'date.today': 'Hoy',
+  'date.yesterday': 'Ayer',
+  'date.justNow': 'Ahora mismo',
 };
 
 export default es;

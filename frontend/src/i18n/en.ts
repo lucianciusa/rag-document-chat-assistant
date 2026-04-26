@@ -84,7 +84,7 @@ const en: Record<string, string> = {
   'docs.title': 'Knowledge Base',
   'docs.hint': 'Upload files for this assistant. It won\'t see files from other assistants.',
   'docs.upload.cta': 'Click to upload or drag & drop',
-  'docs.upload.formats': 'PDF, Word, TXT, CSV, MD (max 10 MB each)',
+  'docs.upload.formats': 'PDF, Word, PPTX, TXT, CSV, MD, PNG, JPG (max 10 MB each)',
   'docs.upload.processing': 'Processing files…',
   'docs.empty.title': 'No documents yet',
   'docs.empty.hint': 'Upload PDFs, Word, or Text files to give this assistant knowledge.',
@@ -219,6 +219,13 @@ const en: Record<string, string> = {
   'toast.chat.deleted.msg': 'The conversation has been removed.',
   'toast.chat.deleteFailed': 'Deletion Failed',
   'toast.chat.deleteFailed.msg': 'There was an error deleting the conversation.',
+  'toast.chat.cleared': 'Conversation Cleared',
+  'toast.chat.cleared.msg': 'All messages have been removed.',
+  'toast.chat.clearFailed': 'Clear Failed',
+  'toast.chat.clearFailed.msg': 'There was an error clearing the messages.',
+  'clear.session.title': 'Clear Conversation?',
+  'clear.session.message': 'All messages in "{title}" will be deleted. The conversation itself will remain.',
+  'clear.session.confirm': 'Clear Messages',
   'toast.avatar.complete': 'Generation Complete',
   'toast.avatar.complete.msg': 'Your new avatar is ready to review.',
   'toast.avatar.review': 'Review',
@@ -287,6 +294,9 @@ const en: Record<string, string> = {
 
   // ── Misc ───────────────────────────────────────────────────
   'lang.toggle': 'ES',
+  'date.today': 'Today',
+  'date.yesterday': 'Yesterday',
+  'date.justNow': 'Just now',
 };
 
 export default en;

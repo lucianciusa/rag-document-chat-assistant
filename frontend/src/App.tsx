@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal, Quote, Globe, Folder, Github, ChevronDown, Cpu, Home } from 'lucide-react';
+import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal, Quote, Globe, Folder, Github, ChevronDown, Cpu, Home, Eraser } from 'lucide-react';
 import { useT } from './i18n';
 import logo from './assets/logo.png';
 
@@ -20,6 +20,7 @@ interface ChatSession {
   title: string;
   assistant_id: string;
   updated_at: string;
+  message_count?: number;
 }
 
 interface Document {
@@ -51,6 +52,7 @@ interface RecentSession {
   assistant_id: string;
   assistant_name: string;
   assistant_image_url: string | null;
+  message_count?: number;
 }
 
 const SNIPPETS: { key: string; text: string }[] = [
@@ -179,6 +181,7 @@ export default function App() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [assistantToDelete, setAssistantToDelete] = useState<Assistant | null>(null);
   const [sessionToDelete, setSessionToDelete] = useState<ChatSession | null>(null);
+  const [sessionToClear, setSessionToClear] = useState<ChatSession | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<Document | null>(null);
   const [newAsstConfig, setNewAsstConfig] = useState({ name: '', description: '', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' });
   const [editAsstConfig, setEditAsstConfig] = useState({ id: '', name: '', description: '', instructions: '', image_url: '' });
@@ -814,6 +817,25 @@ export default function App() {
     setSessionToDelete(null);
   };
 
+  const confirmClearSession = async () => {
+    if (!sessionToClear) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionToClear.id}/messages`, { method: 'DELETE' });
+      if (res.ok) {
+        if (selectedSession?.id === sessionToClear.id) setMessages([]);
+        setSessions(prev => prev.map(s => s.id === sessionToClear.id ? { ...s, message_count: 0 } : s));
+        if (selectedAssistant) fetchSessions(selectedAssistant.id);
+        showToast('success', t('toast.chat.cleared'), t('toast.chat.cleared.msg'));
+      } else {
+        showToast('error', t('toast.chat.clearFailed'), t('toast.chat.clearFailed.msg'));
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('error', t('toast.chat.clearFailed'), t('toast.chat.clearFailed.msg'));
+    }
+    setSessionToClear(null);
+  };
+
   const fetchSessions = async (assistantId: string) => {
     try {
       const res = await fetch(`/api/assistants/${assistantId}/sessions/`);
@@ -1049,6 +1071,7 @@ export default function App() {
     setInput('');
     const userCreatedAt = new Date().toISOString();
     setMessages(prev => [...prev, { role: 'user', content: userMessage, created_at: userCreatedAt }]);
+    setSessions(prev => prev.map(s => s.id === selectedSession.id ? { ...s, message_count: (s.message_count || 0) + 1 } : s));
     setIsLoading(true);
     setIsRegenerating(false);
 
@@ -1351,7 +1374,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
   const getDateGroup = (dateStr?: string) => {
     if (!dateStr) return null;
     const date = new Date(dateStr);
-    return new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Paris', year: 'numeric', month: 'numeric', day: 'numeric' }).format(date);
+    return new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'es-ES', { timeZone: 'Europe/Paris', year: 'numeric', month: 'numeric', day: 'numeric' }).format(date);
   };
 
   const formatDateSeparator = (dateStr?: string) => {
@@ -1365,17 +1388,17 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayGroup = getDateGroup(yesterday.toISOString());
 
-    if (targetGroup === todayGroup) return 'Today';
-    if (targetGroup === yesterdayGroup) return 'Yesterday';
+    if (targetGroup === todayGroup) return t('date.today');
+    if (targetGroup === yesterdayGroup) return t('date.yesterday');
 
     const date = new Date(dateStr);
-    return new Intl.DateTimeFormat(undefined, { timeZone: 'Europe/Paris', month: 'long', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined }).format(date);
+    return new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'es-ES', { timeZone: 'Europe/Paris', month: 'long', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined }).format(date);
   };
 
   const formatTime = (dateStr?: string) => {
     if (!dateStr) return '';
     const date = new Date(dateStr);
-    return date.toLocaleTimeString(undefined, { timeZone: 'Europe/Paris', hour: 'numeric', minute: '2-digit' });
+    return date.toLocaleTimeString(lang === 'en' ? 'en-US' : 'es-ES', { timeZone: 'Europe/Paris', hour: 'numeric', minute: '2-digit' });
   };
 
   // ---- Renders ----
@@ -1619,6 +1642,15 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                               >
                                 <Edit2 size={13} />
                               </button>
+                              {(s.message_count ?? 0) > 0 && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setSessionToClear(s); }}
+                                  className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-amber-500 hover:bg-amber-50 dark:hover:text-amber-400 dark:hover:bg-amber-500/10 rounded transition-all`}
+                                  title={t('clear.session.confirm')}
+                                >
+                                  <Eraser size={13} />
+                                </button>
+                              )}
                               <button
                                 onClick={(e) => handleDeleteSession(s, e)}
                                 className={`opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded transition-all ${selectedSession?.id === s.id ? 'text-primary-500 dark:text-primary-400 hover:text-red-500 hover:bg-red-50 dark:hover:text-red-400 dark:hover:bg-red-500/10' : ''}`}
@@ -1630,7 +1662,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                           )}
                         </div>
                         <div className={`text-[10px] mt-0.5 ${selectedSession?.id === s.id ? 'text-primary-400/70' : 'text-slate-500'}`}>
-                          {s.updated_at ? new Date(s.updated_at + 'Z').toLocaleDateString('en-US', { timeZone: 'Europe/Paris', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                          {s.updated_at ? new Date(s.updated_at).toLocaleDateString(lang === 'en' ? 'en-US' : 'es-ES', { timeZone: 'Europe/Paris', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : t('date.justNow')}
                         </div>
                       </div>
                     ))}
@@ -1866,7 +1898,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                       <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">{t('docs.hint')}</p>
                     </div>
 
-                    <input type="file" multiple className="hidden" ref={fileInputRef} onChange={handleUpload} accept=".pdf,.docx,.txt,.csv,.md" />
+                    <input type="file" multiple className="hidden" ref={fileInputRef} onChange={handleUpload} accept=".pdf,.docx,.pptx,.txt,.csv,.md,.png,.jpg,.jpeg,.bmp" />
                   </div>
 
                   {/* Dedicated Dropzone */}
@@ -2652,6 +2684,31 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 className="px-5 py-2.5 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
               >
                 {t('delete.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CLEAR SESSION MESSAGES CONFIRMATION MODAL */}
+      {sessionToClear && (
+        <div className="fixed inset-0 bg-slate-50/60 dark:bg-slate-950/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden p-6 text-center">
+            <Eraser size={48} className="mx-auto text-amber-500 mb-4" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">{t('clear.session.title')}</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">{t('clear.session.message', { title: sessionToClear.title || t('session.default') })}</p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => setSessionToClear(null)}
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                {t('delete.cancel')}
+              </button>
+              <button
+                onClick={confirmClearSession}
+                className="px-5 py-2.5 text-sm font-medium bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors shadow-sm"
+              >
+                {t('clear.session.confirm')}
               </button>
             </div>
           </div>
