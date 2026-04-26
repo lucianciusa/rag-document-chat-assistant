@@ -1542,15 +1542,15 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
       <main className="flex-1 flex flex-col h-full bg-white dark:bg-slate-900 relative min-w-0">
         {selectedAssistant ? (
           <>
-            <header className="min-h-[64px] md:min-h-[76px] py-2 md:py-3 px-3 md:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-[80] w-full shrink-0 gap-2 md:gap-3">
-              <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 overflow-hidden">
-                <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden -ml-1 p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors focus:outline-none focus:ring-0">
+            <header className="min-h-[56px] md:min-h-[76px] py-1.5 md:py-3 px-2 md:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-[80] w-full shrink-0 gap-1.5 md:gap-3">
+              <div className="flex items-center gap-1.5 md:gap-3 min-w-0 flex-1 overflow-hidden">
+                <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden -ml-0.5 p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors focus:outline-none focus:ring-0">
                   {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
                 </button>
                 <button onClick={() => setSelectedAssistant(null)} className="md:hidden p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors" title="Home">
                   <Home size={18} />
                 </button>
-                <div className="md:hidden w-px h-6 bg-slate-200 dark:bg-slate-800 mx-1" />
+                <div className="md:hidden w-px h-5 bg-slate-200 dark:bg-slate-800 mx-0.5" />
 
                 <button
                   onClick={() => setShowAssistantDetails(true)}
@@ -1780,9 +1780,9 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                                     : 'bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 rounded-bl-none shadow-sm'
                                     }`}>
                                     {msg.role === 'user' ? (
-                                      <div className="whitespace-pre-wrap leading-relaxed text-[15px] break-words">{cleanContent}</div>
+                                      <div className="whitespace-pre-wrap leading-relaxed text-base break-words">{cleanContent}</div>
                                     ) : (
-                                      <div className="text-[15px] leading-relaxed prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-primary-600 dark:prose-code:text-primary-300 break-words prose-pre:max-w-full">
+                                      <div className="text-base leading-relaxed prose dark:prose-invert prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 dark:prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-200 dark:prose-pre:border-slate-800 prose-code:text-primary-600 dark:prose-code:text-primary-300 break-words prose-pre:max-w-full">
                                         {msg.streaming && !cleanContent.trim() ? (
                                           <div className="flex items-center space-x-2 text-slate-400 py-1">
                                             <Loader2 size={16} className="animate-spin text-primary-500" />
@@ -1900,7 +1900,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                               onChange={(e) => setInput(e.target.value)}
                               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
                               placeholder={t('chat.input.placeholder', { name: selectedAssistant.name })}
-                              className="px-4 md:px-5 py-3 md:py-4 w-full bg-transparent border-0 focus:ring-0 resize-none max-h-48 outline-none text-slate-800 dark:text-slate-200 placeholder-slate-500 dark:placeholder-gray-400 text-[15px] min-w-0"
+                              className="px-4 md:px-5 py-3 md:py-4 w-full bg-transparent border-0 focus:ring-0 resize-none max-h-48 outline-none text-slate-800 dark:text-slate-200 placeholder-slate-500 dark:placeholder-gray-400 text-base min-w-0"
                               rows={input.split('\n').length > 1 ? Math.min(input.split('\n').length, 5) : 1}
                               style={{ minHeight: '56px' }}
                             />
@@ -2027,9 +2027,9 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 </div>
                 <button
                   onClick={() => setShowAddModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-primary-600 text-white hover:bg-primary-500 rounded-lg transition-colors"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-sm font-medium bg-primary-600 text-white hover:bg-primary-500 rounded-lg transition-colors shadow-sm"
                 >
-                  <Plus size={15} /> {t('nav.newAssistant')}
+                  <Plus size={15} /> <span className="hidden sm:inline">{t('nav.newAssistant')}</span>
                 </button>
                 <button onClick={() => setLang(lang === 'en' ? 'es' : 'en')} className="p-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title={t('lang.toggle')}>
                   <Globe size={18} />
