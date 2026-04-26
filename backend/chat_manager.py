@@ -12,7 +12,7 @@ class ChatManager:
         )
         self.chat_deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o-mini")
         
-    async def generate_response(self, query: str, history: list, instructions: str, assistant_id: str):
+    async def generate_response(self, query: str, history: list, instructions: str, assistant_id: str, temperature: float = 0.2):
         messages, citations, context_blocks = await self._build_messages(query, history, instructions, assistant_id)
         if messages is None:
             return "Azure Search not configured.", [], []
@@ -20,15 +20,21 @@ class ChatManager:
         response = await self.openai_client.chat.completions.create(
             model=self.chat_deployment,
             messages=messages,
-            temperature=0.2,
+            temperature=temperature,
             max_tokens=800
         )
 
         reply = response.choices[0].message.content
 
         # Extract citations robustly
-        found_cites = re.findall(r'\[([^\]]+)\]', reply)
-        
+        found_raw = re.findall(r'\[([^\]]+)\]', reply)
+        all_potential = []
+        for fr in found_raw:
+            # Split by comma or semicolon in case LLM grouped them: [doc1, doc2]
+            parts = re.split(r'[;,]', fr)
+            for p in parts:
+                all_potential.append(p.strip())
+
         # Build map of granular citations AND base filenames
         normalized_granular = {c.lower(): c for c in citations}
         base_to_granular = {}
@@ -38,7 +44,7 @@ class ChatManager:
             base_to_granular[base].append(c)
 
         used_citations = []
-        for fc in set(found_cites):
+        for fc in set(all_potential):
             fc_clean = fc.strip().lower()
             if fc_clean in normalized_granular:
                 # Perfect granular match
@@ -71,10 +77,10 @@ class ChatManager:
                     "kind": "vector",
                     "vector": vector_query,
                     "fields": "contentVector",
-                    "k_nearest_neighbors": 5
+                    "k_nearest_neighbors": 10
                 }
             ],
-            top=5,
+            top=10,
             semantic_configuration_name="default-semantic-config",
             query_type="semantic"
         )
@@ -105,7 +111,7 @@ class ChatManager:
         messages.append({"role": "user", "content": query})
         return messages, citations, context_blocks
 
-    async def stream_response(self, query: str, history: list, instructions: str, assistant_id: str):
+    async def stream_response(self, query: str, history: list, instructions: str, assistant_id: str, temperature: float = 0.2):
         messages, citations, context_blocks = await self._build_messages(query, history, instructions, assistant_id)
         if messages is None:
             yield ("token", "Azure Search not configured.")
@@ -116,7 +122,7 @@ class ChatManager:
         stream = await self.openai_client.chat.completions.create(
             model=self.chat_deployment,
             messages=messages,
-            temperature=0.2,
+            temperature=temperature,
             max_tokens=800,
             stream=True,
         )
@@ -131,8 +137,14 @@ class ChatManager:
 
         full_reply = "".join(full_reply_parts)
         # Extract citations (anything inside brackets)
-        found_cites = re.findall(r'\[([^\]]+)\]', full_reply)
-        
+        found_raw = re.findall(r'\[([^\]]+)\]', full_reply)
+        all_potential = []
+        for fr in found_raw:
+            # Split by comma or semicolon in case LLM grouped them: [doc1, doc2]
+            parts = re.split(r'[;,]', fr)
+            for p in parts:
+                all_potential.append(p.strip())
+
         # Build map of granular citations AND base filenames
         normalized_granular = {c.lower(): c for c in citations}
         base_to_granular = {}
@@ -142,7 +154,7 @@ class ChatManager:
             base_to_granular[base].append(c)
 
         used_citations = []
-        for fc in set(found_cites):
+        for fc in set(all_potential):
             fc_clean = fc.strip().lower()
             if fc_clean in normalized_granular:
                 # Perfect granular match

@@ -1,6 +1,5 @@
 const en: Record<string, string> = {
   // ── Nav / Sidebar ──────────────────────────────────────────
-  'app.name': 'Lincite',
   'nav.newAssistant': 'New Assistant',
   'nav.import': 'Import',
   'nav.import.hint': 'Import assistant from .zip',
@@ -44,7 +43,6 @@ const en: Record<string, string> = {
   'home.getStarted.3': 'Chat and get grounded answers with citations',
   'home.getStarted.4': 'Export and share your assistant as a .zip',
   'home.footer.version': 'Lincite v1.0',
-  'home.footer.github': 'GitHub',
 
   // ── Header (assistant view) ────────────────────────────────
   'header.tab.chat': 'Chat',
@@ -54,6 +52,7 @@ const en: Record<string, string> = {
   'header.export.md': 'Export as .md',
   'header.export.pdf': 'Export as .pdf',
   'header.search': 'Search this chat (Ctrl+F)',
+  'assistant.details.profile': 'Assistant Profile',
 
   // ── Chat area ──────────────────────────────────────────────
   'chat.newChat': 'New Chat',
@@ -71,8 +70,6 @@ const en: Record<string, string> = {
   'chat.action.notHelpful': 'Not helpful',
   'chat.action.branch': 'Branch conversation here',
   'chat.action.regenerate': 'Regenerate',
-  'chat.action.copy': 'Copy',
-  'chat.action.quote': 'Quote',
   'chat.search.placeholder': 'Search this conversation…',
   'chat.search.empty': 'Type to search messages.',
   'chat.search.noResults': 'No matches.',
@@ -181,7 +178,7 @@ const en: Record<string, string> = {
 
   // ── Document preview ───────────────────────────────────────
   'preview.loading': 'Loading preview…',
-  'preview.snippet.label': 'Relevant Passage Used in Answer',
+  'preview.snippet.label': 'Relevant Fragment Used in Answer',
   'preview.snippet.viewFull': 'View full document',
 
   // ── Progress overlay ───────────────────────────────────────
@@ -211,6 +208,7 @@ const en: Record<string, string> = {
   'toast.err.clone.msg': 'Unable to clone the assistant.',
   'toast.docs.uploaded': 'Files Uploaded',
   'toast.docs.uploaded.msg': 'Your documents have been processed.',
+  'toast.docs.uploaded.warn': '{n} file{s} failed to index.',
   'toast.docs.uploadFailed': 'Upload Failed',
   'toast.docs.uploadFailed.msg': 'Failed to upload {filename}.',
   'toast.docs.deleted': 'File Deleted',
@@ -247,19 +245,35 @@ const en: Record<string, string> = {
   'toast.pin.pinned': 'Pinned',
   'toast.pin.unpinned': 'Unpinned',
 
-  // ── Instruction template labels ────────────────────────────
+  // ── Instruction templates ──────────────────────────────────
   'template.general': 'General Assistant',
-  'template.legal': 'Legal Advisor',
-  'template.code': 'Code Reviewer',
-  'template.medical': 'Medical Research',
-  'template.tutor': 'Academic Tutor',
-  'template.compliance': 'Compliance Auditor',
   'template.general.desc': 'Helpful answers from your documents',
+  'template.legal': 'Legal Advisor',
   'template.legal.desc': 'Precise, citation-backed legal analysis',
+  'template.code': 'Code Reviewer',
   'template.code.desc': 'Bug detection & best-practice feedback',
+  'template.medical': 'Medical Research',
   'template.medical.desc': 'Clinical findings & study summaries',
+  'template.tutor': 'Academic Tutor',
   'template.tutor.desc': 'Step-by-step concept explanations',
+  'template.compliance': 'Compliance Auditor',
   'template.compliance.desc': 'Policy gap detection & risk flagging',
+
+  // ── Snippets ───────────────────────────────────────────────
+  'snippet.noHallucination': 'No hallucination',
+  'snippet.noHallucination.desc': 'Admit when the answer is not in the documents.',
+  'snippet.stepByStep': 'Step-by-step reasoning',
+  'snippet.stepByStep.desc': 'Show reasoning before stating the final answer.',
+  'snippet.concise': 'Concise tone',
+  'snippet.concise.desc': 'Short answers, no filler words.',
+  'snippet.formal': 'Formal register',
+  'snippet.formal.desc': 'Professional tone, no colloquialisms or emojis.',
+  'snippet.markdown': 'Markdown formatting',
+  'snippet.markdown.desc': 'Use lists, code blocks, and tables.',
+  'snippet.refuseOutOfScope': 'Refuse out-of-scope',
+  'snippet.refuseOutOfScope.desc': 'Decline questions unrelated to the documents.',
+  'snippet.insertAll': 'Insert All Available ({n})',
+  'snippet.allAdded': 'All snippets added.',
 
   // ── Import structure modal ─────────────────────────────────
   'import.modal.title': 'Import Structure',
@@ -272,8 +286,6 @@ const en: Record<string, string> = {
   'import.modal.confirm': 'Got it',
 
   // ── Misc ───────────────────────────────────────────────────
-  'required': '*',
-  'optional': '(optional)',
   'lang.toggle': 'ES',
 };
 

@@ -201,7 +201,6 @@ async def update_assistant(
             old_filename = os.path.basename(assistant.image_url)
             storage.delete_avatar(old_filename)
         ext = os.path.splitext(image.filename)[1] or '.png'
-        import time
         avatar_filename = f"{assistant_id}_{int(time.time())}{ext}"
         avatar_url = storage.upload_avatar_from_file(avatar_filename, image)
         assistant.image_url = avatar_url
@@ -226,7 +225,6 @@ def upload_avatar(
         storage.delete_avatar(old_filename)
     
     ext = os.path.splitext(image.filename)[1] or '.png'
-    import time
     avatar_filename = f"{assistant_id}_{int(time.time())}{ext}"
     avatar_url = storage.upload_avatar_from_file(avatar_filename, image)
     
@@ -365,7 +363,7 @@ def delete_document(doc_id: str, db: Session = Depends(get_db)):
     if not doc: raise HTTPException(status_code=404, detail="Document not found")
     try:
         search_manager.delete_document_by_filename(doc.filename, doc.assistant_id)
-    except: pass
+    except Exception: pass
     count = db.query(Document).filter(Document.filename == doc.filename).count()
     if count <= 1:
         storage.delete_document(doc.filename)
@@ -435,7 +433,7 @@ async def send_chat_message(session_id: str, request: dict, db: Session = Depend
     history = [{"role": m.role, "content": m.content} for m in history_records[-10:]]
 
     db.add(ChatMessage(session_id=session_id, role="user", content=query))
-    reply, cites, context = chat_manager.generate_response(query, history, assistant.instructions, assistant.id)
+    reply, cites, context = await chat_manager.generate_response(query, history, assistant.instructions, assistant.id, temperature=0.2)
     
     ai_msg = ChatMessage(session_id=session_id, role="assistant", content=reply, citations=json.dumps(cites), context=json.dumps(context))
     db.add(ai_msg)
@@ -489,7 +487,7 @@ async def send_chat_message_stream(session_id: str, request: dict, db: Session =
         used_citations = []
         relevant_context = []
         try:
-            async for chunk in chat_manager.stream_response(query, history, chat_session.assistant.instructions, chat_session.assistant.id):
+            async for chunk in chat_manager.stream_response(query, history, chat_session.assistant.instructions, chat_session.assistant.id, temperature=0.2):
                 kind = chunk[0]
                 if kind == "token":
                     payload = chunk[1]
@@ -555,7 +553,7 @@ async def regenerate_last_stream(session_id: str, db: Session = Depends(get_db))
         used_citations = []
         relevant_context = []
         try:
-            async for chunk in chat_manager.stream_response(query, history, session.assistant.instructions, session.assistant.id):
+            async for chunk in chat_manager.stream_response(query, history, session.assistant.instructions, session.assistant.id, temperature=0.7):
                 kind = chunk[0]
                 if kind == "token":
                     payload = chunk[1]

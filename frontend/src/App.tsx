@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Library, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal, Quote, Globe, Folder, Github, ChevronDown, Cpu } from 'lucide-react';
+import { Send, Upload, Trash2, Loader2, FileText, Menu, X, Plus, BookOpen, MessageSquare, Settings, AlertCircle, Bot, Edit2, ChevronLeft, ChevronRight, Sun, Moon, PanelLeftClose, PanelLeftOpen, Zap, Sparkles, ImageIcon, ArrowDown, CheckCircle2, Info, Eye, Check, Briefcase, GraduationCap, Code, HeartPulse, Scale, ShieldCheck, Lightbulb, ThumbsUp, ThumbsDown, RotateCcw, Search, Pin, GitBranch, Download, Copy, GripVertical, MoreHorizontal, Quote, Globe, Folder, Github, ChevronDown, Cpu, Home } from 'lucide-react';
 import { useT } from './i18n';
+import logo from './assets/logo.png';
 
 interface Assistant {
   id: string;
@@ -52,23 +53,22 @@ interface RecentSession {
   assistant_image_url: string | null;
 }
 
-const SNIPPETS: { label: string; text: string }[] = [
-  { label: 'Strict citations', text: 'Always cite the source filename in [brackets] for every factual claim. Never fabricate citations.' },
-  { label: 'No hallucination', text: 'If the context does not contain the answer, state clearly that you do not know based on the provided documents.' },
-  { label: 'Step-by-step reasoning', text: 'Walk through your reasoning step-by-step before stating the final answer.' },
-  { label: 'Concise tone', text: 'Keep answers concise. Avoid filler words and redundant restatements of the question.' },
-  { label: 'Formal register', text: 'Maintain a formal, professional tone. Avoid colloquialisms and emojis.' },
-  { label: 'Markdown formatting', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative. Always cite sources as [filename.pdf].' },
-  { label: 'Refuse out-of-scope', text: 'If the user asks about topics unrelated to the provided documents, politely decline and steer back to the documents.' },
+const SNIPPETS: { key: string; text: string }[] = [
+  { key: 'snippet.noHallucination', text: 'If the context does not contain the answer, state clearly that you do not know based on the provided documents.' },
+  { key: 'snippet.stepByStep', text: 'Walk through your reasoning step-by-step before stating the final answer.' },
+  { key: 'snippet.concise', text: 'Keep answers concise. Avoid filler words and redundant restatements of the question.' },
+  { key: 'snippet.formal', text: 'Maintain a formal, professional tone. Avoid colloquialisms and emojis.' },
+  { key: 'snippet.markdown', text: 'Format answers using Markdown: bullet lists for enumerations, fenced code blocks for code, tables where data is comparative.' },
+  { key: 'snippet.refuseOutOfScope', text: 'If the user asks about topics unrelated to the provided documents, politely decline and steer back to the documents.' },
 ];
 
-const INSTRUCTION_TEMPLATES: { label: string; description: string; instructions: string }[] = [
-  { label: 'General Assistant', description: 'Helpful answers from your documents', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' },
-  { label: 'Legal Advisor', description: 'Precise, citation-backed legal analysis', instructions: 'You are a legal analysis assistant. Provide precise, citation-backed legal interpretations based only on the provided documents. Always clarify that your analysis is informational, not legal advice.' },
-  { label: 'Code Reviewer', description: 'Bug detection & best-practice feedback', instructions: 'You are a senior code reviewer. Analyze code snippets and documents for bugs, security vulnerabilities, and best-practice violations. Provide actionable suggestions with corrected code examples.' },
-  { label: 'Medical Research', description: 'Clinical findings & study summaries', instructions: 'You are a medical research assistant. Summarize clinical findings, compare study methodologies, and extract key data points from provided medical documents. Always note limitations and recommend professional consultation.' },
-  { label: 'Academic Tutor', description: 'Step-by-step concept explanations', instructions: 'You are an academic tutor. Explain concepts from the provided materials in clear, simple language. Use examples, analogies, and step-by-step breakdowns. Ask follow-up questions to check understanding.' },
-  { label: 'Compliance Auditor', description: 'Policy gap detection & risk flagging', instructions: 'You are a compliance and policy auditor. Analyze provided documents against regulatory frameworks and internal policies. Flag non-compliant sections, assess risk levels, and suggest remediation steps.' },
+const INSTRUCTION_TEMPLATES: { key: string; instructions: string }[] = [
+  { key: 'template.general', instructions: 'You are a helpful AI assistant. Answer based only on the provided context.' },
+  { key: 'template.legal', instructions: 'You are a legal analysis assistant. Provide precise, citation-backed legal interpretations based only on the provided documents. Always clarify that your analysis is informational, not legal advice.' },
+  { key: 'template.code', instructions: 'You are a senior code reviewer. Analyze code snippets and documents for bugs, security vulnerabilities, and best-practice violations. Provide actionable suggestions with corrected code examples.' },
+  { key: 'template.medical', instructions: 'You are a medical research assistant. Summarize clinical findings, compare study methodologies, and extract key data points from provided medical documents. Always note limitations and recommend professional consultation.' },
+  { key: 'template.tutor', instructions: 'You are an academic tutor. Explain concepts from the provided materials in clear, simple language. Use examples, analogies, and step-by-step breakdowns. Ask follow-up questions to check understanding.' },
+  { key: 'template.compliance', instructions: 'You are a compliance and policy auditor. Analyze provided documents against regulatory frameworks and internal policies. Flag non-compliant sections, assess risk levels, and suggest remediation steps.' },
 ];
 
 function HighlightedText({ text, highlight, isMarkdown = false }: { text: string; highlight?: string; isMarkdown?: boolean }) {
@@ -101,11 +101,11 @@ function HighlightedText({ text, highlight, isMarkdown = false }: { text: string
   const wrapMatches = (input: string): (string | React.ReactElement)[] => {
     if (!input) return [];
     let parts: (string | React.ReactElement)[] = [input];
-    
+
     highlightParts.forEach(h => {
       const escaped = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(`(${escaped})`, 'gi');
-      
+
       const newParts: (string | React.ReactElement)[] = [];
       parts.forEach(p => {
         if (typeof p === 'string') {
@@ -210,14 +210,45 @@ export default function App() {
     removeImage: boolean
   }>>({});
 
+  const [editAsstImageUrl, setEditAsstImageUrl] = useState<string | null>(null);
+  const [newAsstImageUrl, setNewAsstImageUrl] = useState<string | null>(null);
+
+  // Refs to avoid stale closures in long-running async tasks
+  const pendingEditsRef = useRef(pendingEdits);
+  const editAsstConfigRef = useRef(editAsstConfig);
+  const assistantsRef = useRef(assistants);
+
+  useEffect(() => { pendingEditsRef.current = pendingEdits; }, [pendingEdits]);
+  useEffect(() => { editAsstConfigRef.current = editAsstConfig; }, [editAsstConfig]);
+  useEffect(() => { assistantsRef.current = assistants; }, [assistants]);
+
+  // Manage Blob URLs to avoid memory leaks and flickering
+  useEffect(() => {
+    if (editAsstImage) {
+      const url = (editAsstImage as any).tempUrl || URL.createObjectURL(editAsstImage);
+      setEditAsstImageUrl(url);
+      return () => { if (!(editAsstImage as any).tempUrl) URL.revokeObjectURL(url); };
+    }
+    setEditAsstImageUrl(null);
+  }, [editAsstImage]);
+
+  useEffect(() => {
+    if (newAsstImage) {
+      const url = URL.createObjectURL(newAsstImage);
+      setNewAsstImageUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+    setNewAsstImageUrl(null);
+  }, [newAsstImage]);
+
   const showToast = (type: 'success' | 'info' | 'error', title: string, description: string, action?: { label: string, onClick: () => void }) => {
     setToastConfig({ type, title, description, action });
-    // If it has an action, maybe keep it longer or until dismissed? Let's keep the timeout but increase to 5s if there is an action.
     setTimeout(() => setToastConfig(null), action ? 8000 : 3000);
   };
 
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<{ id: string, filename: string } | null>(null);
+  const [showAssistantDetails, setShowAssistantDetails] = useState(false);
   const [previewContent, setPreviewContent] = useState<{ type: string, filename: string, content?: string, blobUrl?: string, highlightText?: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
@@ -407,12 +438,12 @@ export default function App() {
       // During auto-scroll, we always hide the button and extend the auto-scroll state
       setShowScrollButton(false);
       if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = setTimeout(() => { 
-        isAutoScrollingRef.current = false; 
+      scrollTimeoutRef.current = setTimeout(() => {
+        isAutoScrollingRef.current = false;
       }, 500);
       return;
     }
-    
+
     setShowScrollButton(!isNearBottom);
   };
 
@@ -483,17 +514,22 @@ export default function App() {
 
       setCreationProgress({ current: 0, total: docsToUpload.length });
       let failed = 0;
-      for (let i = 0; i < docsToUpload.length; i++) {
-        setCreationProgress({ current: i + 1, total: docsToUpload.length });
+      let completed = 0;
+      
+      await Promise.all(docsToUpload.map(async (file) => {
         const fd = new FormData();
-        fd.append('file', docsToUpload[i]);
+        fd.append('file', file);
         try {
           const r = await fetch(`/api/assistants/${created.id}/documents/`, { method: 'POST', body: fd });
           if (!r.ok) failed++;
         } catch {
           failed++;
+        } finally {
+          completed++;
+          setCreationProgress({ current: completed, total: docsToUpload.length });
         }
-      }
+      }));
+
       setCreationProgress(null);
       fetchAssistants(); fetchStats(); fetchRecentSessions();
 
@@ -602,11 +638,12 @@ export default function App() {
   const handleEditAssistantClick = (assistant: Assistant, e?: React.MouseEvent) => {
     e?.stopPropagation();
 
-    // Restore any pending edits for this assistant if they exist
-    if (pendingEdits[assistant.id]) {
-      setEditAsstConfig(pendingEdits[assistant.id].config);
-      setEditAsstImage(pendingEdits[assistant.id].imageFile);
-      setRemoveEditImage(pendingEdits[assistant.id].removeImage);
+    // Restore any pending edits for this assistant if they exist (using ref to avoid stale closures)
+    const currentPending = pendingEditsRef.current;
+    if (currentPending[assistant.id]) {
+      setEditAsstConfig(currentPending[assistant.id].config);
+      setEditAsstImage(currentPending[assistant.id].imageFile);
+      setRemoveEditImage(currentPending[assistant.id].removeImage);
     } else {
       setEditAsstConfig({
         id: assistant.id,
@@ -677,18 +714,31 @@ export default function App() {
         const file = new File([blob], 'generated_avatar.png', { type: blob.type || 'image/png' });
         (file as any).tempUrl = data.image_url;
 
-        setPendingEdits(prev => ({
-          ...prev,
-          [assistantId]: {
-            config: prev[assistantId]?.config || editAsstConfig,
-            imageFile: file,
-            removeImage: false
-          }
-        }));
+        setPendingEdits(prev => {
+          const baseConfig = prev[assistantId]?.config || 
+                             (editAsstConfigRef.current.id === assistantId ? editAsstConfigRef.current : null) ||
+                             assistantsRef.current.find(a => a.id === assistantId) || 
+                             editAsstConfigRef.current; // Last resort fallback
+
+          return {
+            ...prev,
+            [assistantId]: {
+              config: {
+                id: baseConfig.id || assistantId,
+                name: baseConfig.name || '',
+                description: baseConfig.description || '',
+                instructions: baseConfig.instructions || '',
+                image_url: baseConfig.image_url || ''
+              },
+              imageFile: file,
+              removeImage: false
+            }
+          };
+        });
 
         setEditAsstImage(prev => {
           // Only update the live modal if they are still looking at the same assistant
-          if (editAsstConfig.id === assistantId) {
+          if (editAsstConfigRef.current.id === assistantId) {
             setRemoveEditImage(false);
             return file;
           }
@@ -698,12 +748,8 @@ export default function App() {
         showToast('success', t('toast.avatar.complete'), t('toast.avatar.complete.msg'), {
           label: t('toast.avatar.review'),
           onClick: () => {
-            // Find by ID in the latest state to avoid stale closure issues
-            setAssistants(current => {
-              const assistant = current.find(a => a.id === assistantId);
-              if (assistant) handleEditAssistantClick(assistant);
-              return current;
-            });
+            const assistant = assistantsRef.current.find(a => a.id === assistantId);
+            if (assistant) handleEditAssistantClick(assistant);
           }
         });
       } else {
@@ -833,22 +879,35 @@ export default function App() {
   const processFiles = async (files: File[]) => {
     if (!selectedAssistant) return;
     setUploading(true);
+    setCreationProgress({ current: 0, total: files.length });
 
-    for (const file of files) {
+    let failed = 0;
+    let completed = 0;
+
+    await Promise.all(files.map(async (file) => {
       const formData = new FormData();
       formData.append('file', file);
       try {
         const res = await fetch(`/api/assistants/${selectedAssistant.id}/documents/`, { method: 'POST', body: formData });
-        if (!res.ok) throw new Error();
+        if (!res.ok) failed++;
       } catch (err) {
-        showToast('error', t('toast.docs.uploadFailed'), t('toast.docs.uploadFailed.msg', { filename: file.name }));
+        failed++;
+      } finally {
+        completed++;
+        setCreationProgress({ current: completed, total: files.length });
       }
-    }
+    }));
 
+    setCreationProgress(null);
     setUploading(false);
     fetchDocuments(selectedAssistant.id);
     if (fileInputRef.current) fileInputRef.current.value = '';
-    showToast('success', t('toast.docs.uploaded'), t('toast.docs.uploaded.msg'));
+    
+    if (failed === 0) {
+      showToast('success', t('toast.docs.uploaded'), t('toast.docs.uploaded.msg'));
+    } else {
+      showToast('info', t('toast.docs.uploaded'), t('toast.docs.uploaded.warn', { n: failed, s: failed > 1 ? 's' : '' }));
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -1273,19 +1332,19 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
 
     if (matchingContexts.length > 0) {
       const snippets = matchingContexts.map(c => {
-        const parts = c.split(/\]:\s?|:\s?/);
-        return parts.length > 1 ? parts.slice(1).join(']: ').trim() : '';
+        const colonIdx = c.indexOf(']: ');
+        return colonIdx !== -1 ? c.slice(colonIdx + 3).trim() : '';
       }).filter(Boolean);
 
       if (snippets.length > 0) {
-        // Pass the joined snippets to be highlighted in the full document
-        handlePreviewDocument({ id: doc.id, filename: doc.filename }, snippets.join('\n\n---\n\n'));
-      } else {
-        handlePreviewDocument({ id: doc.id, filename: doc.filename });
+        // Show snippet directly — skip loading the full document
+        setPreviewDoc({ id: doc.id, filename: doc.filename });
+        setPreviewLoading(false);
+        setPreviewContent({ type: 'snippet', filename: doc.filename, content: snippets.join('\n\n') });
+        return;
       }
-    } else {
-      handlePreviewDocument({ id: doc.id, filename: doc.filename });
     }
+    handlePreviewDocument({ id: doc.id, filename: doc.filename });
   };
 
   // ---- Helpers ----
@@ -1342,7 +1401,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         <aside className={`fixed md:static inset-y-0 left-0 bg-slate-50 dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 text-slate-700 dark:text-gray-300 w-72 transform transition-transform duration-300 z-50 flex flex-col ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
           <div className="h-[64px] md:h-[76px] px-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
             <button onClick={() => { setSelectedAssistant(null); setSidebarOpen(false); }} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <Library className="text-primary-400" size={24} />
+              <img src={logo} alt="Lincite Logo" className="w-8 h-8 rounded-lg" />
               <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
             </button>
             <button className="md:hidden text-slate-600 dark:text-slate-400" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
@@ -1431,25 +1490,34 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
           <>
             <header className="min-h-[64px] md:min-h-[76px] py-2 md:py-3 px-3 md:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shadow-sm z-[80] w-full shrink-0 gap-2 md:gap-3">
               <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1 overflow-hidden">
-                <button onClick={() => setSidebarOpen(true)} className="md:hidden -ml-1 p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors focus:outline-none focus:ring-0">
-                  <Menu size={20} />
+                <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden -ml-1 p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors focus:outline-none focus:ring-0">
+                  {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
                 </button>
+                <button onClick={() => setSelectedAssistant(null)} className="md:hidden p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors" title="Home">
+                  <Home size={18} />
+                </button>
+                <div className="md:hidden w-px h-6 bg-slate-200 dark:bg-slate-800 mx-1" />
 
-                {selectedAssistant.image_url ? (
-                  <img src={selectedAssistant.image_url} alt={selectedAssistant.name} className="w-8 h-8 md:w-10 md:h-10 rounded-lg object-cover shrink-0 border border-slate-200 dark:border-slate-800" />
-                ) : (
-                  <div className="p-1.5 md:p-2 bg-primary-900/30 text-primary-400 rounded-lg shrink-0">
-                    <Bot size={18} className="md:w-6 md:h-6" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-[13px] md:text-lg font-bold text-slate-800 dark:text-slate-200 leading-tight truncate">{selectedAssistant.name}</h2>
-                  {selectedAssistant.description && (
-                    <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 truncate opacity-70 leading-none mt-0.5" title={selectedAssistant.description}>
-                      {selectedAssistant.description}
-                    </p>
+                <button
+                  onClick={() => setShowAssistantDetails(true)}
+                  className="flex items-center gap-2 md:gap-3 hover:opacity-80 transition-opacity min-w-0 flex-1 text-left"
+                >
+                  {selectedAssistant.image_url ? (
+                    <img src={selectedAssistant.image_url} alt={selectedAssistant.name} className="w-8 h-8 md:w-10 md:h-10 rounded-lg object-cover shrink-0 border border-slate-200 dark:border-slate-800" />
+                  ) : (
+                    <div className="p-1.5 md:p-2 bg-primary-900/30 text-primary-400 rounded-lg shrink-0">
+                      <Bot size={18} className="md:w-6 md:h-6" />
+                    </div>
                   )}
-                </div>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-[13px] md:text-lg font-bold text-slate-800 dark:text-slate-200 leading-tight truncate">{selectedAssistant.name}</h2>
+                    {selectedAssistant.description && (
+                      <p className="text-[10px] md:text-xs text-slate-500 dark:text-slate-400 truncate opacity-70 leading-none mt-0.5" title={selectedAssistant.description}>
+                        {selectedAssistant.description}
+                      </p>
+                    )}
+                  </div>
+                </button>
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
@@ -1870,7 +1938,7 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
             {/* Homepage Top Bar */}
             <div className="h-[76px] px-5 md:px-8 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
-                <Library className="text-primary-400" size={24} />
+                <img src={logo} alt="Lincite Logo" className="w-8 h-8 rounded-lg" />
                 <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-wide">Lincite</h1>
               </div>
               <div className="flex items-center gap-2">
@@ -2084,18 +2152,18 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     <div>
                       <h3 className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">{t('home.templates.title')}</h3>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {INSTRUCTION_TEMPLATES.slice(0, 4).map((t, i) => (
+                        {INSTRUCTION_TEMPLATES.slice(0, 4).map((tmpl, i) => (
                           <button
                             key={i}
                             onClick={() => {
-                              setNewAsstConfig({ name: '', description: '', instructions: t.instructions });
+                              setNewAsstConfig({ name: '', description: '', instructions: tmpl.instructions });
                               setShowAddModal(true);
                               setWizardStep(0);
                             }}
                             className="text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3.5 hover:border-primary-300 dark:hover:border-primary-500/40 hover:shadow-md transition-all group"
                           >
-                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 group-hover:text-primary-600 dark:group-hover:text-primary-400 mb-1">{t.label}</p>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">{t.description}</p>
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 group-hover:text-primary-600 dark:group-hover:text-primary-400 mb-1">{t(tmpl.key)}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{t(tmpl.key + '.desc')}</p>
                           </button>
                         ))}
                       </div>
@@ -2149,8 +2217,8 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{t('edit.avatar')}</label>
                 <div className="flex items-center gap-4">
                   <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
-                    {editAsstImage ? (
-                      <img src={URL.createObjectURL(editAsstImage)} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(URL.createObjectURL(editAsstImage))} />
+                    {editAsstImageUrl ? (
+                      <img src={editAsstImageUrl} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(editAsstImageUrl)} />
                     ) : editAsstConfig.image_url && !removeEditImage ? (
                       <img src={editAsstConfig.image_url} alt="Avatar" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(editAsstConfig.image_url!)} />
                     ) : (
@@ -2212,16 +2280,16 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                                   }}
                                   className="w-full text-left px-3 py-2 bg-primary-50 dark:bg-primary-500/10 text-primary-600 dark:text-primary-400 font-semibold border-b border-slate-100 dark:border-slate-800 hover:bg-primary-100 dark:hover:bg-primary-500/20 transition-colors"
                                 >
-                                  Insert All Available ({available.length})
+                                  {t('snippet.insertAll', { n: String(available.length) })}
                                 </button>
                               )}
                               {available.map((sn, i) => (
                                 <button key={i} type="button" title={sn.text} onClick={() => { setEditAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors group border-b border-slate-50 dark:border-slate-800/50 last:border-0">
-                                  <div className="font-medium text-xs text-slate-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400">{sn.label}</div>
-                                  <div className="text-[11px] text-slate-500 whitespace-pre-wrap line-clamp-2">{sn.text}</div>
+                                  <div className="font-medium text-xs text-slate-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400">{t(sn.key)}</div>
+                                  <div className="text-[11px] text-slate-500 whitespace-pre-wrap line-clamp-2">{t(sn.key + '.desc')}</div>
                                 </button>
                               ))}
-                              {available.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400 italic">All snippets added.</div>}
+                              {available.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400 italic">{t('snippet.allAdded')}</div>}
                             </>
                           );
                         })()}
@@ -2333,22 +2401,22 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {[<Lightbulb size={16} />, <Scale size={16} />, <Code size={16} />, <HeartPulse size={16} />, <GraduationCap size={16} />, <ShieldCheck size={16} />].map((icon, i) => {
-                        const t = instructionTemplates[i];
+                        const tmpl = instructionTemplates[i];
                         return (
                           <button
                             key={i}
                             type="button"
                             onClick={() => {
-                              if (selectedTemplate === t.label) return;
-                              setNewAsstConfig({ ...newAsstConfig, instructions: t.instructions });
-                              setSelectedTemplate(t.label);
+                              if (selectedTemplate === tmpl.key) return;
+                              setNewAsstConfig({ ...newAsstConfig, instructions: tmpl.instructions });
+                              setSelectedTemplate(tmpl.key);
                             }}
-                            className={`text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center gap-2 ${selectedTemplate === t.label
+                            className={`text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center gap-2 ${selectedTemplate === tmpl.key
                               ? 'border-primary-400 dark:border-primary-500 bg-primary-50 dark:bg-primary-500/10 text-primary-700 dark:text-primary-300 shadow-sm ring-1 ring-primary-200 dark:ring-primary-500/30'
                               : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/50'
                               }`}
                           >
-                            {icon} {t.label}
+                            {icon} {t(tmpl.key)}
                           </button>
                         );
                       })}
@@ -2374,16 +2442,16 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                                         }}
                                         className="w-full text-left px-3 py-2 bg-primary-50 dark:bg-primary-500/10 text-primary-600 dark:text-primary-400 font-semibold border-b border-slate-100 dark:border-slate-800 hover:bg-primary-100 dark:hover:bg-primary-500/20 transition-colors"
                                       >
-                                        Insert All Available ({available.length})
+                                        {t('snippet.insertAll', { n: String(available.length) })}
                                       </button>
                                     )}
                                     {available.map((sn, i) => (
                                       <button key={i} type="button" onClick={() => { setNewAsstConfig(c => ({ ...c, instructions: (c.instructions ? c.instructions + '\n\n' : '') + sn.text })); setShowSnippets(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors border-b border-slate-50 dark:border-slate-800/50 last:border-0">
-                                        <div className="font-medium text-xs text-slate-900 dark:text-white">{sn.label}</div>
-                                        <div className="text-[11px] text-slate-500 whitespace-pre-wrap">{sn.text}</div>
+                                        <div className="font-medium text-xs text-slate-900 dark:text-white">{t(sn.key)}</div>
+                                        <div className="text-[11px] text-slate-500 whitespace-pre-wrap">{t(sn.key + '.desc')}</div>
                                       </button>
                                     ))}
-                                    {available.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400 italic">All snippets added.</div>}
+                                    {available.length === 0 && <div className="px-3 py-4 text-center text-xs text-slate-400 italic">{t('snippet.allAdded')}</div>}
                                   </>
                                 );
                               })()}
@@ -2405,8 +2473,8 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     </div>
                     <div className="flex flex-col items-center gap-4">
                       <div className="w-28 h-28 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-600">
-                        {newAsstImage ? (
-                          <img src={URL.createObjectURL(newAsstImage)} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(URL.createObjectURL(newAsstImage))} />
+                        {newAsstImageUrl ? (
+                          <img src={newAsstImageUrl} alt="Preview" className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setPreviewImageUrl(newAsstImageUrl)} />
                         ) : (
                           <Bot size={40} className="text-slate-400" />
                         )}
@@ -2485,8 +2553,8 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     <div className="bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
                       <div className="flex items-center gap-4 p-4">
                         <div className="w-14 h-14 rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
-                          {newAsstImage ? (
-                            <img src={URL.createObjectURL(newAsstImage)} alt="Avatar" className="w-full h-full object-cover" />
+                          {newAsstImageUrl ? (
+                            <img src={newAsstImageUrl} alt="Avatar" className="w-full h-full object-cover" />
                           ) : (
                             <Bot size={24} className="text-slate-400" />
                           )}
@@ -2793,6 +2861,63 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
         </div>
       )}
 
+      {/* ASSISTANT DETAILS MODAL */}
+      {showAssistantDetails && selectedAssistant && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowAssistantDetails(false)}>
+          <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+            <div className="relative h-32 bg-gradient-to-r from-primary-600 to-primary-400 dark:from-primary-900 dark:to-primary-700">
+              <button onClick={() => setShowAssistantDetails(false)} className="absolute top-4 right-4 p-2 bg-black/10 hover:bg-black/20 text-white rounded-full transition-colors backdrop-blur-md">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-8 pb-10 -mt-16">
+              <div className="relative">
+                <div className="w-32 h-32 rounded-3xl overflow-hidden border-4 border-white dark:border-slate-900 shadow-xl bg-white dark:bg-slate-800 flex items-center justify-center">
+                  {selectedAssistant.image_url ? (
+                    <img src={selectedAssistant.image_url} alt={selectedAssistant.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <Bot size={48} className="text-primary-500" />
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 space-y-4">
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">{selectedAssistant.name}</h3>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-primary-100 dark:bg-primary-500/20 text-primary-700 dark:text-primary-300 text-[10px] font-bold uppercase tracking-wider rounded-md">
+                      {t('assistant.details.profile')}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedAssistant.description ? (
+                  <div className="pt-2">
+                    <h4 className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-2">{t('edit.description')}</h4>
+                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                      {selectedAssistant.description}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-slate-400 dark:text-slate-500 italic text-sm pt-2">
+                    {t('home.assistant.noDescription')}
+                  </p>
+                )}
+
+                <div className="pt-6 flex justify-end">
+                  <button
+                    onClick={() => setShowAssistantDetails(false)}
+                    className="px-6 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-semibold transition-colors"
+                  >
+                    {t('import.modal.confirm')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ENLARGED IMAGE PREVIEW MODAL */}
       {previewImageUrl && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[300] flex items-center justify-center p-4" onClick={() => setPreviewImageUrl(null)}>
@@ -2854,11 +2979,11 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
 
       {/* IMPORT STRUCTURE INFO MODAL */}
       {showImportInfo && (
-        <div 
+        <div
           className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[200] flex items-center justify-center p-4"
           onClick={() => setShowImportInfo(false)}
         >
-          <div 
+          <div
             className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-200"
             onClick={e => e.stopPropagation()}
           >

@@ -1,6 +1,5 @@
 const es: Record<string, string> = {
   // ── Nav / Sidebar ──────────────────────────────────────────
-  'app.name': 'Lincite',
   'nav.newAssistant': 'Nuevo Asistente',
   'nav.import': 'Importar',
   'nav.import.hint': 'Importar asistente desde .zip',
@@ -44,7 +43,6 @@ const es: Record<string, string> = {
   'home.getStarted.3': 'Chatea y obtén respuestas con citas',
   'home.getStarted.4': 'Exporta y comparte tu asistente como .zip',
   'home.footer.version': 'Lincite v1.0',
-  'home.footer.github': 'GitHub',
 
   // ── Header (assistant view) ────────────────────────────────
   'header.tab.chat': 'Chat',
@@ -54,6 +52,7 @@ const es: Record<string, string> = {
   'header.export.md': 'Exportar como .md',
   'header.export.pdf': 'Exportar como .pdf',
   'header.search': 'Buscar en este chat (Ctrl+F)',
+  'assistant.details.profile': 'Perfil del Asistente',
 
   // ── Chat area ──────────────────────────────────────────────
   'chat.newChat': 'Nuevo Chat',
@@ -71,8 +70,6 @@ const es: Record<string, string> = {
   'chat.action.notHelpful': 'No útil',
   'chat.action.branch': 'Ramificar conversación aquí',
   'chat.action.regenerate': 'Regenerar',
-  'chat.action.copy': 'Copiar',
-  'chat.action.quote': 'Citar',
   'chat.search.placeholder': 'Buscar en esta conversación…',
   'chat.search.empty': 'Escribe para buscar mensajes.',
   'chat.search.noResults': 'Sin coincidencias.',
@@ -181,7 +178,7 @@ const es: Record<string, string> = {
 
   // ── Document preview ───────────────────────────────────────
   'preview.loading': 'Cargando vista previa…',
-  'preview.snippet.label': 'Pasaje Relevante Usado en la Respuesta',
+  'preview.snippet.label': 'Fragmento Relevante Usado en la Respuesta',
   'preview.snippet.viewFull': 'Ver documento completo',
 
   // ── Progress overlay ───────────────────────────────────────
@@ -211,6 +208,7 @@ const es: Record<string, string> = {
   'toast.err.clone.msg': 'No se pudo clonar el asistente.',
   'toast.docs.uploaded': 'Archivos Subidos',
   'toast.docs.uploaded.msg': 'Tus documentos han sido procesados.',
+  'toast.docs.uploaded.warn': '{n} archivo{s} no pudo indexarse.',
   'toast.docs.uploadFailed': 'Error al Subir',
   'toast.docs.uploadFailed.msg': 'Error al subir {filename}.',
   'toast.docs.deleted': 'Archivo Eliminado',
@@ -247,19 +245,35 @@ const es: Record<string, string> = {
   'toast.pin.pinned': 'Fijado',
   'toast.pin.unpinned': 'Desfijado',
 
-  // ── Instruction template labels ────────────────────────────
+  // ── Instruction templates ──────────────────────────────────
   'template.general': 'Asistente General',
-  'template.legal': 'Asesor Legal',
-  'template.code': 'Revisor de Código',
-  'template.medical': 'Investigación Médica',
-  'template.tutor': 'Tutor Académico',
-  'template.compliance': 'Auditor de Cumplimiento',
   'template.general.desc': 'Respuestas útiles desde tus documentos',
+  'template.legal': 'Asesor Legal',
   'template.legal.desc': 'Análisis legal preciso con citas',
+  'template.code': 'Revisor de Código',
   'template.code.desc': 'Detección de bugs y retroalimentación',
+  'template.medical': 'Investigación Médica',
   'template.medical.desc': 'Hallazgos clínicos y resúmenes de estudios',
+  'template.tutor': 'Tutor Académico',
   'template.tutor.desc': 'Explicaciones paso a paso de conceptos',
+  'template.compliance': 'Auditor de Cumplimiento',
   'template.compliance.desc': 'Detección de brechas en políticas y riesgos',
+
+  // ── Snippets ───────────────────────────────────────────────
+  'snippet.noHallucination': 'Sin alucinaciones',
+  'snippet.noHallucination.desc': 'Admite cuando la respuesta no está en los documentos.',
+  'snippet.stepByStep': 'Razonamiento paso a paso',
+  'snippet.stepByStep.desc': 'Muestra el razonamiento antes de dar la respuesta final.',
+  'snippet.concise': 'Tono conciso',
+  'snippet.concise.desc': 'Respuestas cortas, sin palabras de relleno.',
+  'snippet.formal': 'Registro formal',
+  'snippet.formal.desc': 'Tono profesional, sin coloquialismos ni emojis.',
+  'snippet.markdown': 'Formato Markdown',
+  'snippet.markdown.desc': 'Usa listas, bloques de código y tablas.',
+  'snippet.refuseOutOfScope': 'Rechazar temas fuera de contexto',
+  'snippet.refuseOutOfScope.desc': 'Rechaza preguntas no relacionadas con los documentos.',
+  'snippet.insertAll': 'Insertar todos disponibles ({n})',
+  'snippet.allAdded': 'Todos los fragmentos añadidos.',
 
   // ── Import structure modal ─────────────────────────────────
   'import.modal.title': 'Estructura de Importación',
@@ -272,8 +286,6 @@ const es: Record<string, string> = {
   'import.modal.confirm': 'Entendido',
 
   // ── Misc ───────────────────────────────────────────────────
-  'required': '*',
-  'optional': '(opcional)',
   'lang.toggle': 'EN',
 };
 

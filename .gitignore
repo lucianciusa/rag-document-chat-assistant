@@ -48,6 +48,7 @@ node_modules/
 /.vscode/
 .claude/
 .azure/
+scripts/reset_data.py
 TODO.md
 
 # OS generated files
