@@ -235,6 +235,22 @@ def upload_avatar(
     db.refresh(assistant)
     return {"image_url": assistant.image_url}
 
+def _image_call_params(deployment: str, prompt: str) -> dict:
+    """Return optimal generation params based on the deployed model."""
+    d = deployment.lower()
+    if "dall-e-3" in d or "dalle-3" in d or "dalle3" in d:
+        return dict(model=deployment, prompt=prompt, n=1,
+                    size="1024x1024", quality="standard",
+                    style="vivid", response_format="url")
+    if "dall-e-2" in d or "dalle-2" in d or "dalle2" in d:
+        return dict(model=deployment, prompt=prompt, n=1,
+                    size="512x512", response_format="url")
+    # gpt-image-1 / gpt-image-2: quality="low" is significantly faster than default "high"
+    # output_format/output_compression via extra_body to reduce payload size
+    return dict(model=deployment, prompt=prompt, n=1,
+                size="1024x1024", quality="low",
+                extra_body={"output_format": "jpeg", "output_compression": 75})
+
 @router.post("/assistants/{assistant_id}/avatar/generate")
 def generate_avatar(
     assistant_id: str,
@@ -243,37 +259,32 @@ def generate_avatar(
     assistant = db.query(Assistant).filter(Assistant.id == assistant_id).first()
     if not assistant:
         raise HTTPException(status_code=404, detail="Assistant not found")
-    
+
     if not image_client or not image_deployment:
         raise HTTPException(status_code=501, detail="Image generation is not configured. Add AZURE_OPENAI_IMAGE_DEPLOYMENT to your .env file.")
-    
-    prompt = f"Minimalist flat icon for '{assistant.name}'"
-    if assistant.description:
-        prompt += f": {assistant.description[:80]}"
-    prompt += ". Simple geometric shapes, vibrant gradient, no text, square."
-    
+
+    prompt = (
+        f"Minimalist flat icon for an AI assistant named '{assistant.name}'. "
+        + (f"{assistant.description[:60]}. " if assistant.description else "")
+        + "Bold geometric shapes, vibrant solid colors, no text, square format."
+    )
+
     try:
-        import time
         avatar_filename = f"tmp_{assistant_id}_{int(time.time())}.png"
-        
-        response = image_client.images.generate(
-            model=image_deployment,
-            prompt=prompt,
-            n=1,
-            size="1024x1024"
-        )
+        params = _image_call_params(image_deployment, prompt)
+        response = image_client.images.generate(**params)
         image_data = response.data[0]
-        
-        if hasattr(image_data, 'b64_json') and image_data.b64_json:
-            img_bytes = base64.b64decode(image_data.b64_json)
-        elif hasattr(image_data, 'url') and image_data.url:
+
+        if hasattr(image_data, 'url') and image_data.url:
             with httpx.Client(timeout=60.0) as client:
                 img_response = client.get(image_data.url)
                 img_response.raise_for_status()
             img_bytes = img_response.content
+        elif hasattr(image_data, 'b64_json') and image_data.b64_json:
+            img_bytes = base64.b64decode(image_data.b64_json)
         else:
             raise Exception("Unexpected response format")
-        
+
         avatar_url = storage.upload_avatar(avatar_filename, img_bytes)
         return {"image_url": avatar_url}
     except Exception as e:

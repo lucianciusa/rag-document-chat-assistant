@@ -901,7 +901,7 @@ export default function App() {
   const consumeStream = async (
     sessionId: string,
     body: object,
-    endpoint: 'chat/stream' | 'regenerate'
+    endpoint: 'chat/stream' | 'regenerate/stream'
   ): Promise<void> => {
     streamAbortRef.current?.abort();
     streamAbortRef.current = new AbortController();
@@ -1035,7 +1035,7 @@ export default function App() {
       return copy;
     });
 
-    await consumeStream(selectedSession.id, {}, 'regenerate');
+    await consumeStream(selectedSession.id, {}, 'regenerate/stream');
     setIsLoading(false);
     setIsRegenerating(false);
   };
