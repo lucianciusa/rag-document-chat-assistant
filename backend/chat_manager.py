@@ -11,6 +11,36 @@ class ChatManager:
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
         )
         self.chat_deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT", "gpt-4o-mini")
+
+    async def format_instructions(self, instructions: str) -> str:
+        if not instructions.strip():
+            return instructions
+
+        prompt = (
+            "You are an expert Prompt Engineer. Your task is to take the provided AI assistant instructions "
+            "and reformat/restructure them to be as clear and effective as possible for an LLM to follow.\n\n"
+            "Guidelines:\n"
+            "1. Use a clear structure (e.g., # Persona, # Rules, # Context Handling, # Tone).\n"
+            "2. Ensure all original requirements and constraints are preserved.\n"
+            "3. Use Markdown for better hierarchy.\n"
+            "4. If the instructions are extremely short, expand them into a more professional persona description.\n"
+            "5. Do NOT change the meaning or intent of the original instructions.\n"
+            "6. Provide ONLY the formatted instructions, no conversational filler.\n\n"
+            "Original Instructions:\n"
+            f"{instructions}\n\n"
+            "Formatted Instructions:"
+        )
+        
+        try:
+            response = await self.openai_client.chat.completions.create(
+                model=self.chat_deployment,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"[ChatManager] Error formatting instructions: {e}")
+            return instructions
         
     async def generate_response(self, query: str, history: list, instructions: str, assistant_id: str, temperature: float = 0.2):
         messages, citations, context_blocks = await self._build_messages(query, history, instructions, assistant_id)

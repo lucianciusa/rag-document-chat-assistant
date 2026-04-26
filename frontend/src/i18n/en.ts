@@ -118,6 +118,9 @@ const en: Record<string, string> = {
   'wizard.instructions.hint': 'Define how your assistant should behave. Choose a preset or write your own.',
   'wizard.instructions.label': 'Custom Instructions',
   'wizard.instructions.snippet': 'Insert snippet',
+  'instructions.format': 'Magic Format',
+  'instructions.format.hint': 'Optimize and structure instructions for better AI performance',
+  'instructions.formatting': 'Formatting…',
 
   'wizard.avatar.title': 'Avatar',
   'wizard.avatar.hint': 'Upload an image to personalize your assistant. AI generation is available after creation.',
@@ -153,6 +156,7 @@ const en: Record<string, string> = {
   'edit.instructions': 'System Instructions',
   'edit.instructions.hint': 'Define how the AI should behave, its tone, and strict rules.',
   'edit.snippet': 'Insert snippet',
+  'edit.instructions.format': 'Magic Format',
   'edit.cancel': 'Cancel',
   'edit.save': 'Save Changes',
 

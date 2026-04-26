@@ -199,6 +199,7 @@ export default function App() {
   const [showSaveWhileGeneratingModal, setShowSaveWhileGeneratingModal] = useState(false);
   const [generationTime, setGenerationTime] = useState(0);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [isFormatting, setIsFormatting] = useState(false);
 
   const [toastConfig, setToastConfig] = useState<{
     type: 'success' | 'info' | 'error',
@@ -815,6 +816,36 @@ export default function App() {
       showToast('error', t('toast.chat.deleteFailed'), t('toast.chat.deleteFailed.msg'));
     }
     setSessionToDelete(null);
+  };
+
+  const handleFormatInstructions = async (type: 'wizard' | 'edit') => {
+    const instructions = type === 'wizard' ? newAsstConfig.instructions : editAsstConfig.instructions;
+    if (!instructions.trim()) return;
+
+    setIsFormatting(true);
+    try {
+      const res = await fetch('/api/format-instructions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instructions })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (type === 'wizard') {
+          setNewAsstConfig(prev => ({ ...prev, instructions: data.formatted }));
+        } else {
+          setEditAsstConfig(prev => ({ ...prev, instructions: data.formatted }));
+        }
+        showToast('success', t('toast.assistant.saved'), 'Prompt optimized successfully.');
+      } else {
+        showToast('error', 'Formatting Failed', 'Could not optimize instructions.');
+      }
+    } catch (e) {
+      console.error("Formatting failed", e);
+      showToast('error', 'Formatting Failed', 'Network error.');
+    } finally {
+      setIsFormatting(false);
+    }
   };
 
   const confirmClearSession = async () => {
@@ -1957,8 +1988,10 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                   <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
                     <Settings size={20} className="text-slate-500" /> {t('docs.system')}
                   </h3>
-                  <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-xl text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap border border-slate-200/50 dark:border-slate-800/50 font-mono leading-relaxed">
-                    {selectedAssistant.instructions}
+                  <div className="bg-slate-50 dark:bg-slate-950 p-6 rounded-xl text-sm text-slate-700 dark:text-slate-300 border border-slate-200/50 dark:border-slate-800/50 leading-relaxed prose prose-slate dark:prose-invert max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {selectedAssistant.instructions}
+                    </ReactMarkdown>
                   </div>
                 </div>
 
@@ -2294,7 +2327,17 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t('edit.instructions')} <span className="text-red-500">*</span></label>
-                  <div className="relative snippets-menu-container">
+                  <div className="flex items-center gap-3 relative snippets-menu-container">
+                    <button 
+                      type="button" 
+                      onClick={() => handleFormatInstructions('edit')} 
+                      disabled={isFormatting || !editAsstConfig.instructions.trim()} 
+                      title={t('instructions.format.hint')}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {isFormatting ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                      {isFormatting ? t('instructions.formatting') : t('edit.instructions.format')}
+                    </button>
                     <button type="button" onClick={() => setShowSnippets(showSnippets === 'edit' ? null : 'edit')} className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1"><Plus size={12} /> {t('edit.snippet')}</button>
                     {showSnippets === 'edit' && (
                       <div className="absolute right-0 top-full mt-3 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm max-h-60 overflow-y-auto">
@@ -2456,7 +2499,17 @@ ${messages.map(m => `<div class="msg ${m.role}"><div class="role">${m.role === '
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{t('wizard.instructions.label')} <span className="text-red-500">*</span></label>
-                        <div className="relative snippets-menu-container">
+                        <div className="flex items-center gap-3 relative snippets-menu-container">
+                          <button 
+                            type="button" 
+                            onClick={() => handleFormatInstructions('wizard')} 
+                            disabled={isFormatting || !newAsstConfig.instructions.trim()} 
+                            title={t('instructions.format.hint')}
+                            className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1 disabled:opacity-50"
+                          >
+                            {isFormatting ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                            {isFormatting ? t('instructions.formatting') : t('instructions.format')}
+                          </button>
                           <button type="button" onClick={() => setShowSnippets(showSnippets === 'create' ? null : 'create')} className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex items-center gap-1"><Plus size={12} /> {t('wizard.instructions.snippet')}</button>
                           {showSnippets === 'create' && (
                             <div className="absolute right-0 top-full mt-2.5 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-50 text-sm max-h-60 overflow-y-auto mb-4">

@@ -118,6 +118,9 @@ const es: Record<string, string> = {
   'wizard.instructions.hint': 'Define cómo debe comportarse tu asistente. Elige un preset o escribe el tuyo.',
   'wizard.instructions.label': 'Instrucciones Personalizadas',
   'wizard.instructions.snippet': 'Insertar fragmento',
+  'instructions.format': 'Formato Mágico',
+  'instructions.format.hint': 'Optimiza y estructura las instrucciones para un mejor rendimiento de la IA',
+  'instructions.formatting': 'Formateando…',
 
   'wizard.avatar.title': 'Avatar',
   'wizard.avatar.hint': 'Sube una imagen para personalizar tu asistente. La generación con IA está disponible tras la creación.',
@@ -153,6 +156,7 @@ const es: Record<string, string> = {
   'edit.instructions': 'Instrucciones del Sistema',
   'edit.instructions.hint': 'Define cómo debe comportarse la IA, su tono y reglas estrictas.',
   'edit.snippet': 'Insertar fragmento',
+  'edit.instructions.format': 'Formato Mágico',
   'edit.cancel': 'Cancelar',
   'edit.save': 'Guardar Cambios',
 

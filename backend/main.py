@@ -780,6 +780,12 @@ def get_stats(db: Session = Depends(get_db)):
         "sessions": db.query(ChatSession).count(),
     }
 
+@router.post("/format-instructions")
+async def format_instructions(request: dict = Body(...)):
+    instructions = request.get("instructions", "")
+    formatted = await chat_manager.format_instructions(instructions)
+    return {"formatted": formatted}
+
 # ------------------------------------------------------------------ #
 #  Frontend Static Files Serving
 # ------------------------------------------------------------------ #
