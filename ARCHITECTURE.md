@@ -4,6 +4,8 @@
 
 **Lincite** is a multi-tenant RAG (Retrieval-Augmented Generation) platform where each AI assistant owns an isolated knowledge base. The system connects a **React/TypeScript SPA**, an **Azure SQL relational database**, **Azure Blob Storage**, and **Azure AI cloud services** (Search, OpenAI). Knowledge Base Isolation is the core invariant — documents uploaded for one assistant are never surfaced when querying another.
 
+![Lincite Architecture Diagram](docs/architecture.png)
+
 ---
 
 ## Technology Stack

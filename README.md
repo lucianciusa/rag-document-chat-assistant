@@ -2,6 +2,8 @@
 
 A full-stack Retrieval-Augmented Generation platform where each AI assistant owns an isolated knowledge base. Upload documents, chat with grounded answers and grouped source citations, manage multiple specialised assistants, and deploy to Azure App Service in one push.
 
+![Lincite Architecture Diagram](docs/architecture.png)
+
 ---
 
 ## Features
